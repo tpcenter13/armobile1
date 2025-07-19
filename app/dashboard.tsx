@@ -4,7 +4,6 @@ import React, { useEffect, useState } from 'react';
 import {
     Alert,
     Dimensions,
-    FlatList,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -31,17 +30,9 @@ interface ARSession {
   icon: string;
 }
 
-interface ARStat {
-  label: string;
-  value: string;
-  icon: string;
-  color: string;
-}
-
 const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://your-vercel-app.vercel.app';
 
 export default function Dashboard() {
-  const [activeMode, setActiveMode] = useState('scanning');
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   
@@ -51,20 +42,6 @@ export default function Dashboard() {
     { id: '3', name: 'Face Tracking', duration: '1h 30m', type: 'Tracking', icon: '👤' },
     { id: '4', name: 'AR Markers', duration: '3h 20m', type: 'Markers', icon: '🎯' },
   ]);
-
-  const [arStats] = useState<ARStat[]>([
-    { label: 'Objects Scanned', value: '142', icon: '🔍', color: '#f97316' },
-    { label: 'AR Sessions', value: '89', icon: '⚡', color: '#fb923c' },
-    { label: 'Hours Active', value: '67.5', icon: '⏱️', color: '#f59e0b' },
-    { label: 'Accuracy', value: '94.2%', icon: '🎯', color: '#10b981' },
-  ]);
-
-  const quickActions = [
-    { id: '1', title: 'Start Scan', icon: '🔍', color: '#f97316' },
-    { id: '2', title: 'AR Camera', icon: '📷', color: '#fb923c' },
-    { id: '3', title: 'Calibrate', icon: '⚙️', color: '#f59e0b' },
-    { id: '4', title: 'Gallery', icon: '🖼️', color: '#8b5cf6' },
-  ];
 
   // Fetch current user data
   useEffect(() => {
@@ -159,13 +136,6 @@ export default function Dashboard() {
     </TouchableOpacity>
   );
 
-  const renderQuickAction = ({ item }: { item: any }) => (
-    <TouchableOpacity style={[styles.quickActionCard, { borderColor: item.color }]}>
-      <Text style={styles.quickActionIcon}>{item.icon}</Text>
-      <Text style={styles.quickActionText}>{item.title}</Text>
-    </TouchableOpacity>
-  );
-
   const handleProfilePress = () => {
     if (!user) return;
     
@@ -247,79 +217,6 @@ export default function Dashboard() {
               </View>
             </View>
           )}
-
-          {/* AR Status Card */}
-          <View style={styles.statusCard}>
-            <View style={styles.statusHeader}>
-              <Text style={styles.statusTitle}>AR System Status</Text>
-              <View style={[styles.statusIndicator, { backgroundColor: '#10b981' }]} />
-            </View>
-            <View style={styles.statusContent}>
-              <View style={styles.statusItem}>
-                <Text style={styles.statusLabel}>Camera</Text>
-                <Text style={styles.statusValue}>✅ Active</Text>
-              </View>
-              <View style={styles.statusItem}>
-                <Text style={styles.statusLabel}>Tracking</Text>
-                <Text style={styles.statusValue}>🎯 Precise</Text>
-              </View>
-              <View style={styles.statusItem}>
-                <Text style={styles.statusLabel}>Sensors</Text>
-                <Text style={styles.statusValue}>⚡ Optimal</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Quick Actions */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <FlatList
-              data={quickActions}
-              renderItem={renderQuickAction}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.quickActionsContainer}
-            />
-          </View>
-
-          {/* AR Statistics */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>AR Statistics</Text>
-            <View style={styles.statsGrid}>
-              {arStats.map((stat, index) => (
-                <View key={index} style={[styles.statCard, { borderColor: stat.color }]}>
-                  <Text style={styles.statIcon}>{stat.icon}</Text>
-                  <Text style={styles.statValue}>{stat.value}</Text>
-                  <Text style={styles.statLabel}>{stat.label}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          {/* Mode Selector */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>AR Mode</Text>
-            <View style={styles.modeSelector}>
-              {['scanning', 'tracking', 'mapping'].map((mode) => (
-                <TouchableOpacity
-                  key={mode}
-                  style={[
-                    styles.modeButton,
-                    activeMode === mode && styles.activeModeButton
-                  ]}
-                  onPress={() => setActiveMode(mode)}
-                >
-                  <Text style={[
-                    styles.modeText,
-                    activeMode === mode && styles.activeModeText
-                  ]}>
-                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
 
           {/* Recent AR Sessions */}
           <View style={styles.section}>
@@ -481,6 +378,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#f1f5f9',
   },
+  statusIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
   userCardContent: {
     gap: 8,
   },
@@ -498,47 +400,6 @@ const styles = StyleSheet.create({
     color: '#f1f5f9',
     fontWeight: '600',
   },
-  statusCard: {
-    margin: 20,
-    padding: 20,
-    backgroundColor: 'rgba(26, 10, 0, 0.9)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(249, 115, 22, 0.2)',
-  },
-  statusHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  statusTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#f1f5f9',
-  },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  statusContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statusItem: {
-    alignItems: 'center',
-  },
-  statusLabel: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 4,
-  },
-  statusValue: {
-    fontSize: 14,
-    color: '#f1f5f9',
-    fontWeight: '600',
-  },
   section: {
     marginHorizontal: 20,
     marginBottom: 24,
@@ -548,80 +409,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#f1f5f9',
     marginBottom: 16,
-  },
-  quickActionsContainer: {
-    paddingRight: 20,
-  },
-  quickActionCard: {
-    width: 80,
-    height: 80,
-    backgroundColor: 'rgba(26, 10, 0, 0.8)',
-    borderRadius: 12,
-    borderWidth: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  quickActionIcon: {
-    fontSize: 24,
-    marginBottom: 4,
-  },
-  quickActionText: {
-    fontSize: 10,
-    color: '#f1f5f9',
-    textAlign: 'center',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  statCard: {
-    width: (width - 60) / 2,
-    backgroundColor: 'rgba(26, 10, 0, 0.8)',
-    borderRadius: 12,
-    borderWidth: 2,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  statIcon: {
-    fontSize: 24,
-    marginBottom: 8,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#f1f5f9',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  modeSelector: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(26, 10, 0, 0.8)',
-    borderRadius: 12,
-    padding: 4,
-  },
-  modeButton: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  activeModeButton: {
-    backgroundColor: '#f97316',
-  },
-  modeText: {
-    fontSize: 14,
-    color: '#64748b',
-    fontWeight: '600',
-  },
-  activeModeText: {
-    color: '#1a0a00',
   },
   sessionCard: {
     flexDirection: 'row',
