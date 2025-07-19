@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
+import { initializeApp } from 'firebase/app';
+import { doc, getDoc, getFirestore } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
@@ -13,8 +15,21 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 
 const { width } = Dimensions.get('window');
+
+// Firebase configuration
+const firebaseConfig = {
+  apiKey: Constants.expoConfig?.extra?.firebaseApiKey,
+  authDomain: Constants.expoConfig?.extra?.firebaseAuthDomain,
+  projectId: Constants.expoConfig?.extra?.firebaseProjectId,
+  storageBucket: Constants.expoConfig?.extra?.firebaseStorageBucket,
+  messagingSenderId: Constants.expoConfig?.extra?.firebaseMessagingSenderId,
+  appId: Constants.expoConfig?.extra?.firebaseAppId,
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 interface User {
   id: string;
@@ -32,6 +47,11 @@ interface ARSession {
   icon: string;
 }
 
+interface MarkerData {
+  imageUrl: string; // Cloudinary URL for .patt file
+  videoUrl: string; // Cloudinary URL for video
+}
+
 const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://arweb-tau.vercel.app';
 
 interface ARWorldButtonProps {
@@ -43,7 +63,7 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
 
   const handleEnterARWorld = async () => {
     if (!permission) {
-      // Permissions still loading
+      console.log('Permissions still loading');
       return;
     }
 
@@ -51,7 +71,8 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
       if (permission.canAskAgain) {
         const response = await requestPermission();
         if (response.granted) {
-          onPress(); // Open camera if permission is granted
+          console.log('Camera permission granted');
+          onPress();
         } else {
           Alert.alert(
             'Camera Permission Required',
@@ -72,7 +93,7 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
       return;
     }
 
-    // Permission already granted, open camera
+    console.log('Camera permission already granted');
     onPress();
   };
 
@@ -97,6 +118,8 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCamera, setShowCamera] = useState(false);
+  const [markerData, setMarkerData] = useState<MarkerData | null>(null);
+  const [markerId, setMarkerId] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
 
   const [arSessions] = useState<ARSession[]>([
@@ -155,6 +178,53 @@ export default function Dashboard() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchMarkerData = async (markerId: string) => {
+    try {
+      console.log('Fetching marker data for ID:', markerId);
+      const docRef = doc(db, 'markers', markerId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        console.log('Marker data found:', docSnap.data());
+        setMarkerData(docSnap.data() as MarkerData);
+        setMarkerId(markerId);
+      } else {
+        console.error('Marker not found in Firestore');
+        Alert.alert('Error', 'Marker not found');
+        setShowCamera(false);
+      }
+    } catch (error) {
+      console.error('Error fetching marker data:', error);
+      Alert.alert('Error', 'Failed to load marker data');
+      setShowCamera(false);
+    }
+  };
+
+  const handleScan = (data: string) => {
+    console.log('QR code scanned:', data);
+    if (data.includes('arweb-tau.vercel.app/ar?markerId=')) {
+      try {
+        const url = new URL(data);
+        const markerId = url.searchParams.get('markerId');
+        if (markerId) {
+          console.log('Extracted markerId:', markerId);
+          fetchMarkerData(markerId);
+        } else {
+          console.error('No markerId found in QR code URL');
+          Alert.alert('Error', 'Invalid QR code: No markerId');
+          setShowCamera(false);
+        }
+      } catch (error) {
+        console.error('Error parsing QR code URL:', error);
+        Alert.alert('Error', 'Invalid QR code format');
+        setShowCamera(false);
+      }
+    } else {
+      console.error('QR code does not match expected URL format');
+      Alert.alert('Error', 'Invalid QR code: Wrong URL');
+      setShowCamera(false);
     }
   };
 
@@ -234,10 +304,42 @@ export default function Dashboard() {
       );
     }
 
+    if (!markerData) {
+      return (
+        <View style={styles.cameraContainer}>
+          <CameraView
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr'],
+            }}
+            onBarcodeScanned={({ data }) => handleScan(data)}
+          />
+          <Text style={styles.instructions}>Scan a QR code to start the AR experience</Text>
+          <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+            <Text style={styles.backButtonText}>Back</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.cameraContainer}>
-        <CameraView style={StyleSheet.absoluteFillObject} facing="back" />
-        <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+        <WebView
+          style={StyleSheet.absoluteFillObject}
+          source={{ uri: `${API_URL}/ar?markerId=${encodeURIComponent(markerId!)}` }}
+          allowsInlineMediaPlayback
+          mediaPlaybackRequiresUserAction={false}
+          onError={(event) => console.error('WebView error:', event.nativeEvent)}
+        />
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => {
+            setShowCamera(false);
+            setMarkerData(null);
+            setMarkerId(null);
+          }}
+        >
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
       </View>
@@ -309,7 +411,6 @@ export default function Dashboard() {
   );
 }
 
-// Styles (unchanged)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -571,5 +672,14 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  instructions: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    position: 'absolute',
+    bottom: 50,
+    textAlign: 'center',
+    width: '100%',
   },
 });

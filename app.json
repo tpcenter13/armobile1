@@ -3,7 +3,13 @@
     "name": "arweb1",
     "slug": "arweb1",
     "extra": {
-      "apiUrl": "https://arweb-tau.vercel.app/"
+      "apiUrl": "https://arweb-tau.vercel.app/",
+      "firebaseApiKey": "your-api-key",
+      "firebaseAuthDomain": "your-auth-domain",
+      "firebaseProjectId": "your-project-id",
+      "firebaseStorageBucket": "your-storage-bucket",
+      "firebaseMessagingSenderId": "your-sender-id",
+      "firebaseAppId": "your-app-id"
     },
     "permissions": [
       {
