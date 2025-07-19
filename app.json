@@ -2,6 +2,9 @@
   "expo": {
     "name": "arweb1",
     "slug": "arweb1",
+    "extra": {
+      "apiUrl": "https://arweb-tau.vercel.app/"
+    },
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

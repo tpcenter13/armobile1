@@ -1,5 +1,8 @@
-import React, { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import React, { useEffect, useState } from 'react';
 import {
+    Alert,
     Dimensions,
     FlatList,
     ScrollView,
@@ -11,6 +14,14 @@ import {
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
+
+interface User {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+}
 
 interface ARSession {
   id: string;
@@ -27,8 +38,13 @@ interface ARStat {
   color: string;
 }
 
+const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://your-vercel-app.vercel.app';
+
 export default function Dashboard() {
   const [activeMode, setActiveMode] = useState('scanning');
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  
   const [arSessions] = useState<ARSession[]>([
     { id: '1', name: '3D Object Scan', duration: '2h 15m', type: 'Object', icon: '📦' },
     { id: '2', name: 'Environment Map', duration: '45m', type: 'Mapping', icon: '🗺️' },
@@ -49,6 +65,84 @@ export default function Dashboard() {
     { id: '3', title: 'Calibrate', icon: '⚙️', color: '#f59e0b' },
     { id: '4', title: 'Gallery', icon: '🖼️', color: '#8b5cf6' },
   ];
+
+  // Fetch current user data
+  useEffect(() => {
+    fetchCurrentUser();
+  }, []);
+
+  const fetchCurrentUser = async () => {
+    try {
+      // First, try to get user from AsyncStorage (already stored from login)
+      const storedUser = await AsyncStorage.getItem('user');
+      if (storedUser) {
+        setUser(JSON.parse(storedUser));
+        setLoading(false);
+        return;
+      }
+
+      // If not in storage, fetch from API
+      const authToken = await AsyncStorage.getItem('authToken');
+      if (!authToken) {
+        console.error('No auth token found');
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/api/current-user`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user);
+        // Store user data for future use
+        await AsyncStorage.setItem('user', JSON.stringify(data.user));
+      } else {
+        const errorData = await response.json();
+        console.error('Failed to fetch user:', errorData.message);
+        Alert.alert('Error', 'Failed to load user profile');
+      }
+    } catch (error) {
+      console.error('Error fetching user:', error);
+      
+      // Try to get user from AsyncStorage as fallback
+      try {
+        const storedUser = await AsyncStorage.getItem('user');
+        if (storedUser) {
+          setUser(JSON.parse(storedUser));
+        }
+      } catch (storageError) {
+        console.error('Error getting user from storage:', storageError);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getUserDisplayName = () => {
+    if (!user) return 'AR Explorer';
+    if (user.firstName && user.lastName) {
+      return `${user.firstName} ${user.lastName}`;
+    }
+    if (user.firstName) return user.firstName;
+    if (user.email) return user.email.split('@')[0];
+    return 'AR Explorer';
+  };
+
+  const getUserInitials = () => {
+    if (!user) return '👤';
+    if (user.firstName && user.lastName) {
+      return `${user.firstName.charAt(0).toUpperCase()}${user.lastName.charAt(0).toUpperCase()}`;
+    }
+    if (user.firstName) return user.firstName.charAt(0).toUpperCase();
+    if (user.email) return user.email.charAt(0).toUpperCase();
+    return '👤';
+  };
 
   const renderARSession = ({ item }: { item: ARSession }) => (
     <TouchableOpacity style={styles.sessionCard}>
@@ -71,6 +165,16 @@ export default function Dashboard() {
       <Text style={styles.quickActionText}>{item.title}</Text>
     </TouchableOpacity>
   );
+
+  const handleProfilePress = () => {
+    if (!user) return;
+    
+    Alert.alert(
+      'Profile Information',
+      `Name: ${getUserDisplayName()}\nEmail: ${user.email}${user.phone ? `\nPhone: ${user.phone}` : ''}`,
+      [{ text: 'OK' }]
+    );
+  };
 
   return (
     <>
@@ -96,14 +200,53 @@ export default function Dashboard() {
         >
           {/* Header */}
           <View style={styles.header}>
-            <View>
+            <View style={styles.welcomeSection}>
               <Text style={styles.welcomeText}>Welcome back,</Text>
-              <Text style={styles.userNameText}>AR Explorer</Text>
+              <Text style={styles.userNameText}>
+                {loading ? 'Loading...' : getUserDisplayName()}
+              </Text>
+              {user && user.email && (
+                <Text style={styles.userEmailText}>{user.email}</Text>
+              )}
             </View>
-            <TouchableOpacity style={styles.profileButton}>
-              <Text style={styles.profileIcon}>👤</Text>
+            <TouchableOpacity 
+              style={styles.profileButton}
+              onPress={handleProfilePress}
+              disabled={!user}
+            >
+              <Text style={styles.profileIcon}>
+                {typeof getUserInitials() === 'string' && getUserInitials().length <= 2 
+                  ? getUserInitials() 
+                  : '👤'}
+              </Text>
             </TouchableOpacity>
           </View>
+
+          {/* User Status Card (if authenticated) */}
+          {user && (
+            <View style={styles.userCard}>
+              <View style={styles.userCardHeader}>
+                <Text style={styles.userCardTitle}>Account Status</Text>
+                <View style={[styles.statusIndicator, { backgroundColor: '#10b981' }]} />
+              </View>
+              <View style={styles.userCardContent}>
+                <View style={styles.userInfoRow}>
+                  <Text style={styles.userInfoLabel}>Status</Text>
+                  <Text style={styles.userInfoValue}>✅ Verified</Text>
+                </View>
+                <View style={styles.userInfoRow}>
+                  <Text style={styles.userInfoLabel}>Account</Text>
+                  <Text style={styles.userInfoValue}>🔒 Secured</Text>
+                </View>
+                {user.phone && (
+                  <View style={styles.userInfoRow}>
+                    <Text style={styles.userInfoLabel}>Phone</Text>
+                    <Text style={styles.userInfoValue}>📱 {user.phone}</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
 
           {/* AR Status Card */}
           <View style={styles.statusCard}>
@@ -279,10 +422,13 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingHorizontal: 20,
     paddingTop: 60,
     paddingBottom: 20,
+  },
+  welcomeSection: {
+    flex: 1,
   },
   welcomeText: {
     fontSize: 16,
@@ -293,6 +439,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#f1f5f9',
+    marginBottom: 4,
+  },
+  userEmailText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontStyle: 'italic',
   },
   profileButton: {
     width: 50,
@@ -305,7 +457,46 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   profileIcon: {
-    fontSize: 20,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#f97316',
+  },
+  userCard: {
+    margin: 20,
+    marginTop: 0,
+    padding: 20,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+  },
+  userCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  userCardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#f1f5f9',
+  },
+  userCardContent: {
+    gap: 8,
+  },
+  userInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  userInfoLabel: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  userInfoValue: {
+    fontSize: 14,
+    color: '#f1f5f9',
+    fontWeight: '600',
   },
   statusCard: {
     margin: 20,

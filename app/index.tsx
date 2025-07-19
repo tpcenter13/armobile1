@@ -1,5 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -11,24 +16,83 @@ import {
   View,
 } from 'react-native';
 
+interface LoginResponse {
+  token: string;
+  user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone?: string;
+  };
+}
+
+interface SignupResponse {
+  message: string;
+  user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone?: string;
+  };
+}
+
+const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://your-vercel-app.vercel.app';
+
 export default function Index() {
+  const router = useRouter();
   const [isLogin, setIsLogin] = useState(true);
-  const [formData, setFormData] = useState({ email: '', password: '' });
+  const [formData, setFormData] = useState({ email: '', password: '', firstName: '', lastName: '' });
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleToggle = () => {
+    console.log('Toggling between login and signup');
     setIsLogin(!isLogin);
-    setFormData({ email: '', password: '' });
+    setFormData({ email: '', password: '', firstName: '', lastName: '' });
   };
 
   const handleChange = (name: string, value: string) => {
     setFormData({ ...formData, [name]: value });
   };
 
-  const handleSubmit = () => {
-    if (isLogin) {
-      console.log('Logging in with:', formData);
-    } else {
-      console.log('Signing up with:', formData);
+  const handleSubmit = async () => {
+    console.log('Submit button clicked, isLogin:', isLogin, 'formData:', formData);
+    setIsLoading(true);
+    try {
+      if (isLogin) {
+        console.log('Sending login request to:', `${API_URL}/api/Login`);
+        const response = await axios.post<LoginResponse>(`${API_URL}/api/Login`, {
+          email: formData.email,
+          password: formData.password,
+        });
+
+        const { token, user } = response.data;
+
+        await AsyncStorage.setItem('authToken', token);
+        await AsyncStorage.setItem('user', JSON.stringify(user));
+
+        console.log('Login successful:', user);
+
+        router.push('/dashboard');
+      } else {
+        console.log('Sending signup request to:', `${API_URL}/api/signup`);
+        const response = await axios.post<SignupResponse>(`${API_URL}/api/signup`, {
+          email: formData.email,
+          password: formData.password,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+        });
+
+        console.log('Signup successful:', response.data);
+        Alert.alert('Success', 'Account created! Please log in.');
+        setIsLogin(true);
+      }
+    } catch (error: any) {
+      console.error('Error during submit:', error.response?.data || error.message);
+      Alert.alert('Error', error.response?.data?.error || 'Something went wrong');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -38,15 +102,12 @@ export default function Index() {
       <View style={styles.container}>
         <View style={styles.backgroundGradient} />
         
-        {/* AR Grid Pattern */}
         <View style={styles.gridOverlay} />
         
-        {/* Floating AR Elements */}
         <View style={styles.arElement1} />
         <View style={styles.arElement2} />
         <View style={styles.arElement3} />
         
-        {/* Scanning Lines */}
         <View style={styles.scanLine1} />
         <View style={styles.scanLine2} />
 
@@ -59,7 +120,6 @@ export default function Index() {
             contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}
             keyboardShouldPersistTaps="handled"
           >
-            {/* AR App Logo/Title */}
             <View style={styles.logoContainer}>
               <Text style={styles.appTitle}>AR VISION</Text>
               <Text style={styles.appSubtitle}>Augmented Reality Platform</Text>
@@ -71,6 +131,33 @@ export default function Index() {
               <Text style={styles.subtitle}>
                 {isLogin ? 'Enter your credentials to dive into augmented reality' : 'Create your AR profile and explore new dimensions'}
               </Text>
+
+              {!isLogin && (
+                <>
+                  <View style={styles.inputContainer}>
+                    <View style={styles.inputGlow} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="First Name"
+                      placeholderTextColor="#64748b"
+                      onChangeText={(text) => handleChange('firstName', text)}
+                      value={formData.firstName}
+                      autoCapitalize="words"
+                    />
+                  </View>
+                  <View style={styles.inputContainer}>
+                    <View style={styles.inputGlow} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Last Name"
+                      placeholderTextColor="#64748b"
+                      onChangeText={(text) => handleChange('lastName', text)}
+                      value={formData.lastName}
+                      autoCapitalize="words"
+                    />
+                  </View>
+                </>
+              )}
 
               <View style={styles.inputContainer}>
                 <View style={styles.inputGlow} />
@@ -97,7 +184,11 @@ export default function Index() {
                 />
               </View>
 
-              <TouchableOpacity style={styles.button} onPress={handleSubmit}>
+              <TouchableOpacity 
+                style={[styles.button, isLoading && styles.buttonDisabled]} 
+                onPress={handleSubmit}
+                disabled={isLoading}
+              >
                 <View style={styles.buttonGlow} />
                 <Text style={styles.buttonText}>
                   {isLogin ? 'ENTER AR WORLD' : 'CREATE AR PROFILE'}
@@ -113,7 +204,6 @@ export default function Index() {
                 </Text>
               </TouchableOpacity>
 
-              {/* AR Feature Highlights */}
               <View style={styles.featuresContainer}>
                 <View style={styles.feature}>
                   <Text style={styles.featureIcon}>🌐</Text>
@@ -150,7 +240,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     opacity: 0.1,
     backgroundColor: 'transparent',
-    // Add a subtle grid pattern
     borderWidth: 1,
     borderColor: '#f97316',
     borderStyle: 'solid',
@@ -295,6 +384,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   buttonGlow: {
     ...StyleSheet.absoluteFillObject,
