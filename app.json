@@ -5,6 +5,12 @@
     "extra": {
       "apiUrl": "https://arweb-tau.vercel.app/"
     },
+    "permissions": [
+      {
+        "name": "camera",
+        "description": "Allow access to the camera to enable AR features."
+      }
+    ],
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

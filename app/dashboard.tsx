@@ -1,15 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import React, { useEffect, useState } from 'react';
 import {
-    Alert,
-    Dimensions,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Dimensions,
+  Linking,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -30,12 +32,73 @@ interface ARSession {
   icon: string;
 }
 
-const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://your-vercel-app.vercel.app';
+const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://arweb-tau.vercel.app';
+
+interface ARWorldButtonProps {
+  onPress: () => void;
+}
+
+const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
+  const [permission, requestPermission] = useCameraPermissions();
+
+  const handleEnterARWorld = async () => {
+    if (!permission) {
+      // Permissions still loading
+      return;
+    }
+
+    if (!permission.granted) {
+      if (permission.canAskAgain) {
+        const response = await requestPermission();
+        if (response.granted) {
+          onPress(); // Open camera if permission is granted
+        } else {
+          Alert.alert(
+            'Camera Permission Required',
+            'Please allow camera access to start the AR experience.',
+            [{ text: 'OK' }],
+          );
+        }
+      } else {
+        Alert.alert(
+          'Camera Permission Denied',
+          'Camera access is required for the AR experience. Please enable it in your device settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+      }
+      return;
+    }
+
+    // Permission already granted, open camera
+    onPress();
+  };
+
+  if (!permission) {
+    return (
+      <View style={styles.cameraContainer}>
+        <Text style={styles.backButtonText}>Checking camera permissions...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity style={styles.arWorldButton} onPress={handleEnterARWorld}>
+      <View style={styles.buttonGlow} />
+      <Text style={styles.arWorldButtonText}>🥽 ENTER AR WORLD</Text>
+      <Text style={styles.arWorldButtonSubtext}>Start New Session</Text>
+    </TouchableOpacity>
+  );
+};
 
 export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  
+  const [showCamera, setShowCamera] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+
   const [arSessions] = useState<ARSession[]>([
     { id: '1', name: '3D Object Scan', duration: '2h 15m', type: 'Object', icon: '📦' },
     { id: '2', name: 'Environment Map', duration: '45m', type: 'Mapping', icon: '🗺️' },
@@ -43,14 +106,12 @@ export default function Dashboard() {
     { id: '4', name: 'AR Markers', duration: '3h 20m', type: 'Markers', icon: '🎯' },
   ]);
 
-  // Fetch current user data
   useEffect(() => {
     fetchCurrentUser();
   }, []);
 
   const fetchCurrentUser = async () => {
     try {
-      // First, try to get user from AsyncStorage (already stored from login)
       const storedUser = await AsyncStorage.getItem('user');
       if (storedUser) {
         setUser(JSON.parse(storedUser));
@@ -58,7 +119,6 @@ export default function Dashboard() {
         return;
       }
 
-      // If not in storage, fetch from API
       const authToken = await AsyncStorage.getItem('authToken');
       if (!authToken) {
         console.error('No auth token found');
@@ -70,14 +130,13 @@ export default function Dashboard() {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
+          Authorization: `Bearer ${authToken}`,
         },
       });
 
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
-        // Store user data for future use
         await AsyncStorage.setItem('user', JSON.stringify(data.user));
       } else {
         const errorData = await response.json();
@@ -86,8 +145,6 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Error fetching user:', error);
-      
-      // Try to get user from AsyncStorage as fallback
       try {
         const storedUser = await AsyncStorage.getItem('user');
         if (storedUser) {
@@ -128,7 +185,9 @@ export default function Dashboard() {
       </View>
       <View style={styles.sessionInfo}>
         <Text style={styles.sessionName}>{item.name}</Text>
-        <Text style={styles.sessionType}>{item.type} • {item.duration}</Text>
+        <Text style={styles.sessionType}>
+          {item.type} • {item.duration}
+        </Text>
       </View>
       <View style={styles.sessionAction}>
         <Text style={styles.sessionActionText}>▶</Text>
@@ -138,61 +197,79 @@ export default function Dashboard() {
 
   const handleProfilePress = () => {
     if (!user) return;
-    
     Alert.alert(
       'Profile Information',
       `Name: ${getUserDisplayName()}\nEmail: ${user.email}${user.phone ? `\nPhone: ${user.phone}` : ''}`,
-      [{ text: 'OK' }]
+      [{ text: 'OK' }],
     );
   };
+
+  if (showCamera) {
+    if (!permission?.granted) {
+      return (
+        <View style={styles.cameraContainer}>
+          <Text style={styles.backButtonText}>
+            {permission?.canAskAgain
+              ? 'Camera permission is required. Please grant permission.'
+              : 'Camera permission denied. Please enable it in settings.'}
+          </Text>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={async () => {
+              if (permission?.canAskAgain) {
+                await requestPermission();
+              } else {
+                Linking.openSettings();
+              }
+            }}
+          >
+            <Text style={styles.backButtonText}>
+              {permission?.canAskAgain ? 'Request Permission' : 'Open Settings'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+            <Text style={styles.backButtonText}>Back</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.cameraContainer}>
+        <CameraView style={StyleSheet.absoluteFillObject} facing="back" />
+        <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+          <Text style={styles.backButtonText}>Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <>
       <StatusBar barStyle="light-content" backgroundColor="#1a0a00" />
       <View style={styles.container}>
-        {/* Background Elements */}
         <View style={styles.backgroundGradient} />
         <View style={styles.gridOverlay} />
-        
-        {/* AR Elements */}
         <View style={styles.arElement1} />
         <View style={styles.arElement2} />
         <View style={styles.arElement3} />
-        
-        {/* Scanning Lines */}
         <View style={styles.scanLine1} />
         <View style={styles.scanLine2} />
 
-        <ScrollView 
-          style={styles.scrollView}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {/* Header */}
+        <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           <View style={styles.header}>
             <View style={styles.welcomeSection}>
               <Text style={styles.welcomeText}>Welcome back,</Text>
-              <Text style={styles.userNameText}>
-                {loading ? 'Loading...' : getUserDisplayName()}
-              </Text>
-              {user && user.email && (
-                <Text style={styles.userEmailText}>{user.email}</Text>
-              )}
+              <Text style={styles.userNameText}>{loading ? 'Loading...' : getUserDisplayName()}</Text>
+              {user?.email && <Text style={styles.userEmailText}>{user.email}</Text>}
             </View>
-            <TouchableOpacity 
-              style={styles.profileButton}
-              onPress={handleProfilePress}
-              disabled={!user}
-            >
+            <TouchableOpacity style={styles.profileButton} onPress={handleProfilePress} disabled={!user}>
               <Text style={styles.profileIcon}>
-                {typeof getUserInitials() === 'string' && getUserInitials().length <= 2 
-                  ? getUserInitials() 
-                  : '👤'}
+                {typeof getUserInitials() === 'string' && getUserInitials().length <= 2 ? getUserInitials() : '👤'}
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* User Status Card (if authenticated) */}
           {user && (
             <View style={styles.userCard}>
               <View style={styles.userCardHeader}>
@@ -218,29 +295,21 @@ export default function Dashboard() {
             </View>
           )}
 
-          {/* Recent AR Sessions */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent AR Sessions</Text>
             {arSessions.map((session) => (
-              <View key={session.id}>
-                {renderARSession({ item: session })}
-              </View>
+              <View key={session.id}>{renderARSession({ item: session })}</View>
             ))}
           </View>
 
-          {/* AR World Access Button */}
-          <TouchableOpacity style={styles.arWorldButton}>
-            <View style={styles.buttonGlow} />
-            <Text style={styles.arWorldButtonText}>🥽 ENTER AR WORLD</Text>
-            <Text style={styles.arWorldButtonSubtext}>Start New Session</Text>
-          </TouchableOpacity>
-
+          <ARWorldButton onPress={() => setShowCamera(true)} />
         </ScrollView>
       </View>
     </>
   );
 }
 
+// Styles (unchanged)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -483,5 +552,24 @@ const styles = StyleSheet.create({
   arWorldButtonSubtext: {
     fontSize: 12,
     color: '#64748b',
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backButton: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    padding: 10,
+    backgroundColor: 'rgba(249, 115, 22, 0.8)',
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
