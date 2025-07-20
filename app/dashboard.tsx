@@ -400,68 +400,80 @@ export default function Dashboard() {
       console.log('Loading AR URL:', arUrl);
       
       return (
-        <View style={styles.cameraContainer}>
-          {webViewError ? (
+       <View style={styles.cameraContainer}>
+      {/* ✅ ADD: Camera View as background */}
+      <CameraView
+        style={StyleSheet.absoluteFillObject}
+        facing="back"
+      />
+      
+      {webViewError ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Failed to load AR experience</Text>
+          <Text style={styles.errorDetails}>{webViewError}</Text>
+          <Text style={styles.errorDetails}>URL: {arUrl}</Text>
+          <TouchableOpacity 
+            style={styles.retryButton} 
+            onPress={() => {
+              setWebViewError(null);
+            }}
+          >
+            <Text style={styles.backButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+          ) : (
+   <WebView
+          key={`webview-${markerId}-${Date.now()}`}
+          style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]} // ✅ CHANGED: Made transparent
+          source={{ uri: arUrl }}
+          allowsInlineMediaPlayback={true}
+          mediaPlaybackRequiresUserAction={false}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          allowsFullscreenVideo={true}
+          mixedContentMode="compatibility"
+          startInLoadingState={true}
+          // ✅ ADD: Make WebView content transparent
+          injectedJavaScript={`
+            document.body.style.backgroundColor = 'transparent';
+            document.documentElement.style.backgroundColor = 'transparent';
+            true;
+          `}
+          renderLoading={() => (
+            <View style={[styles.errorContainer, { backgroundColor: 'transparent' }]}> {/* ✅ CHANGED: Made transparent */}
+              <ActivityIndicator size="large" color="#f97316" />
+              <Text style={styles.instructions}>Loading AR experience...</Text>
+            </View>
+          )}
+          onLoadStart={() => console.log('WebView loading started')}
+          onLoad={() => console.log('WebView loaded successfully')}
+          onLoadEnd={() => console.log('WebView loading ended')}
+          onError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.error('WebView error:', nativeEvent);
+            setWebViewError(`Error: ${nativeEvent.description || 'Unknown error'}`);
+          }}
+          onHttpError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.error('WebView HTTP error:', nativeEvent);
+            setWebViewError(`HTTP ${nativeEvent.statusCode}: ${nativeEvent.description || 'Server error'}`);
+          }}
+          renderError={(errorName) => (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>Failed to load AR experience</Text>
-              <Text style={styles.errorDetails}>{webViewError}</Text>
-              <Text style={styles.errorDetails}>URL: {arUrl}</Text>
-              <TouchableOpacity 
-                style={styles.retryButton} 
-                onPress={() => {
-                  setWebViewError(null);
-                }}
-              >
-                <Text style={styles.backButtonText}>Retry</Text>
-              </TouchableOpacity>
+              <Text style={styles.errorDetails}>{errorName}</Text>
             </View>
-          ) : (
-            <WebView
-              key={`webview-${markerId}-${Date.now()}`}
-              style={StyleSheet.absoluteFillObject}
-              source={{ uri: arUrl }}
-              allowsInlineMediaPlayback={true}
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              allowsFullscreenVideo={true}
-              mixedContentMode="compatibility"
-              startInLoadingState={true}
-              renderLoading={() => (
-                <View style={styles.errorContainer}>
-                  <ActivityIndicator size="large" color="#f97316" />
-                  <Text style={styles.instructions}>Loading AR experience...</Text>
-                </View>
-              )}
-              onLoadStart={() => console.log('WebView loading started')}
-              onLoad={() => console.log('WebView loaded successfully')}
-              onLoadEnd={() => console.log('WebView loading ended')}
-              onError={(syntheticEvent) => {
-                const { nativeEvent } = syntheticEvent;
-                console.error('WebView error:', nativeEvent);
-                setWebViewError(`Error: ${nativeEvent.description || 'Unknown error'}`);
-              }}
-              onHttpError={(syntheticEvent) => {
-                const { nativeEvent } = syntheticEvent;
-                console.error('WebView HTTP error:', nativeEvent);
-                setWebViewError(`HTTP ${nativeEvent.statusCode}: ${nativeEvent.description || 'Server error'}`);
-              }}
-              renderError={(errorName) => (
-                <View style={styles.errorContainer}>
-                  <Text style={styles.errorText}>Failed to load AR experience</Text>
-                  <Text style={styles.errorDetails}>{errorName}</Text>
-                </View>
-              )}
-            />
+          )}
+        />
           )}
           
           <View style={styles.instructionsContainer}>
-            <Text style={styles.instructions}>Point camera at the image to start AR</Text>
-          </View>
+        <Text style={styles.instructions}>Point camera at the image to start AR</Text>
+      </View>
           
-          <TouchableOpacity style={styles.backButton} onPress={resetARState}>
-            <Text style={styles.backButtonText}>Back</Text>
-          </TouchableOpacity>
+           <TouchableOpacity style={styles.backButton} onPress={resetARState}>
+        <Text style={styles.backButtonText}>Back</Text>
+      </TouchableOpacity>
         </View>
       );
     }
