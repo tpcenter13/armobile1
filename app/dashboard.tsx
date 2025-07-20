@@ -393,15 +393,14 @@ export default function Dashboard() {
         </View>
       );
     }
-
-    if (showImageScanner && markerData && markerId) {
-      const baseUrl = API_URL.replace(/\/+$/, '');
-      const arUrl = `${baseUrl}/ar?markerId=${encodeURIComponent(markerId)}`;
-      console.log('Loading AR URL:', arUrl);
+if (showImageScanner && markerData && markerId) {
+  const baseUrl = API_URL.replace(/\/+$/, '');
+  const arUrl = `${baseUrl}/ar?markerId=${encodeURIComponent(markerId)}&t=${Date.now()}`; // Add timestamp to prevent caching
+  console.log('Loading AR URL:', arUrl);
+  console.log('Marker data:', JSON.stringify(markerData, null, 2));
       
-      return (
-       <View style={styles.cameraContainer}>
-      {/* ✅ ADD: Camera View as background */}
+    return (
+    <View style={styles.cameraContainer}>
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
@@ -412,19 +411,24 @@ export default function Dashboard() {
           <Text style={styles.errorText}>Failed to load AR experience</Text>
           <Text style={styles.errorDetails}>{webViewError}</Text>
           <Text style={styles.errorDetails}>URL: {arUrl}</Text>
+          <Text style={styles.errorDetails}>Marker: {markerData.imageUrl}</Text>
+          <Text style={styles.errorDetails}>Video: {markerData.videoUrl}</Text>
           <TouchableOpacity 
             style={styles.retryButton} 
             onPress={() => {
               setWebViewError(null);
+              // Clear cache and retry
+              AsyncStorage.removeItem(`marker_${markerId}`);
+              fetchMarkerData(markerId);
             }}
           >
             <Text style={styles.backButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
-          ) : (
-   <WebView
+      ) : (
+        <WebView
           key={`webview-${markerId}-${Date.now()}`}
-          style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]} // ✅ CHANGED: Made transparent
+          style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]}
           source={{ uri: arUrl }}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
@@ -433,14 +437,20 @@ export default function Dashboard() {
           allowsFullscreenVideo={true}
           mixedContentMode="compatibility"
           startInLoadingState={true}
-          // ✅ ADD: Make WebView content transparent
           injectedJavaScript={`
+            window.onerror = function(message, source, lineno, colno, error) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', message, source, lineno, colno, error: error?.stack }));
+              return true;
+            };
             document.body.style.backgroundColor = 'transparent';
             document.documentElement.style.backgroundColor = 'transparent';
             true;
           `}
+          onMessage={(event) => {
+            console.log('WebView message:', event.nativeEvent.data);
+          }}
           renderLoading={() => (
-            <View style={[styles.errorContainer, { backgroundColor: 'transparent' }]}> {/* ✅ CHANGED: Made transparent */}
+            <View style={[styles.errorContainer, { backgroundColor: 'transparent' }]}>
               <ActivityIndicator size="large" color="#f97316" />
               <Text style={styles.instructions}>Loading AR experience...</Text>
             </View>
@@ -449,14 +459,12 @@ export default function Dashboard() {
           onLoad={() => console.log('WebView loaded successfully')}
           onLoadEnd={() => console.log('WebView loading ended')}
           onError={(syntheticEvent) => {
-            const { nativeEvent } = syntheticEvent;
-            console.error('WebView error:', nativeEvent);
-            setWebViewError(`Error: ${nativeEvent.description || 'Unknown error'}`);
+            console.error('WebView error:', syntheticEvent.nativeEvent);
+            setWebViewError(`Error: ${syntheticEvent.nativeEvent.description || 'Unknown error'}`);
           }}
           onHttpError={(syntheticEvent) => {
-            const { nativeEvent } = syntheticEvent;
-            console.error('WebView HTTP error:', nativeEvent);
-            setWebViewError(`HTTP ${nativeEvent.statusCode}: ${nativeEvent.description || 'Server error'}`);
+            console.error('WebView HTTP error:', syntheticEvent.nativeEvent);
+            setWebViewError(`HTTP ${syntheticEvent.nativeEvent.statusCode}: ${syntheticEvent.nativeEvent.description || 'Server error'}`);
           }}
           renderError={(errorName) => (
             <View style={styles.errorContainer}>
@@ -465,18 +473,18 @@ export default function Dashboard() {
             </View>
           )}
         />
-          )}
-          
-          <View style={styles.instructionsContainer}>
-        <Text style={styles.instructions}>Point camera at the image to start AR</Text>
+      )}
+      
+      <View style={styles.instructionsContainer}>
+        <Text style={styles.instructions}>Point camera at the marker image to start AR</Text>
       </View>
-          
-           <TouchableOpacity style={styles.backButton} onPress={resetARState}>
+      
+      <TouchableOpacity style={styles.backButton} onPress={resetARState}>
         <Text style={styles.backButtonText}>Back</Text>
       </TouchableOpacity>
-        </View>
-      );
-    }
+    </View>
+  );
+}
 
     return (
       <View style={styles.cameraContainer}>
