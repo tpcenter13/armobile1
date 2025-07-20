@@ -5,6 +5,7 @@ import { initializeApp } from 'firebase/app';
 import { doc, getDoc, getFirestore } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   Linking,
@@ -13,7 +14,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -71,7 +72,6 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
       if (permission.canAskAgain) {
         const response = await requestPermission();
         if (response.granted) {
-          console.log('Camera permission granted');
           onPress();
         } else {
           Alert.alert(
@@ -83,7 +83,7 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
       } else {
         Alert.alert(
           'Camera Permission Denied',
-          'Camera access is required for the AR experience. Please enable it in your device settings.',
+          'Camera access is required. Please enable it in settings.',
           [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Open Settings', onPress: () => Linking.openSettings() },
@@ -93,7 +93,6 @@ const ARWorldButton: React.FC<ARWorldButtonProps> = ({ onPress }) => {
       return;
     }
 
-    console.log('Camera permission already granted');
     onPress();
   };
 
@@ -118,9 +117,12 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCamera, setShowCamera] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [showImageScanner, setShowImageScanner] = useState(false);
   const [markerData, setMarkerData] = useState<MarkerData | null>(null);
   const [markerId, setMarkerId] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
+  const [webViewError, setWebViewError] = useState<string | null>(null);
 
   const [arSessions] = useState<ARSession[]>([
     { id: '1', name: '3D Object Scan', duration: '2h 15m', type: 'Object', icon: '📦' },
@@ -144,7 +146,6 @@ export default function Dashboard() {
 
       const authToken = await AsyncStorage.getItem('authToken');
       if (!authToken) {
-        console.error('No auth token found');
         setLoading(false);
         return;
       }
@@ -162,19 +163,16 @@ export default function Dashboard() {
         setUser(data.user);
         await AsyncStorage.setItem('user', JSON.stringify(data.user));
       } else {
-        const errorData = await response.json();
-        console.error('Failed to fetch user:', errorData.message);
         Alert.alert('Error', 'Failed to load user profile');
       }
     } catch (error) {
-      console.error('Error fetching user:', error);
       try {
         const storedUser = await AsyncStorage.getItem('user');
         if (storedUser) {
           setUser(JSON.parse(storedUser));
         }
       } catch (storageError) {
-        console.error('Error getting user from storage:', storageError);
+        console.error('Storage error:', storageError);
       }
     } finally {
       setLoading(false);
@@ -183,46 +181,59 @@ export default function Dashboard() {
 
   const fetchMarkerData = async (markerId: string) => {
     try {
-      console.log('Fetching marker data for ID:', markerId);
+      setIsPreparing(true);
+      setWebViewError(null);
+
+      // Check cache first
+      const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
+      if (cachedData) {
+        setMarkerData(JSON.parse(cachedData));
+        setMarkerId(markerId);
+        setIsPreparing(false);
+        setShowImageScanner(true);
+        return;
+      }
+
+      // Fetch from Firebase
       const docRef = doc(db, 'markers', markerId);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        console.log('Marker data found:', docSnap.data());
-        setMarkerData(docSnap.data() as MarkerData);
+        const data = docSnap.data() as MarkerData;
+        setMarkerData(data);
         setMarkerId(markerId);
+        // Cache data for future scans
+        await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
+        setIsPreparing(false);
+        setShowImageScanner(true);
       } else {
-        console.error('Marker not found in Firestore');
         Alert.alert('Error', 'Marker not found');
         setShowCamera(false);
+        setIsPreparing(false);
       }
     } catch (error) {
       console.error('Error fetching marker data:', error);
       Alert.alert('Error', 'Failed to load marker data');
       setShowCamera(false);
+      setIsPreparing(false);
     }
   };
 
   const handleScan = (data: string) => {
-    console.log('QR code scanned:', data);
     if (data.includes('arweb-tau.vercel.app/ar?markerId=')) {
       try {
         const url = new URL(data);
         const markerId = url.searchParams.get('markerId');
         if (markerId) {
-          console.log('Extracted markerId:', markerId);
           fetchMarkerData(markerId);
         } else {
-          console.error('No markerId found in QR code URL');
           Alert.alert('Error', 'Invalid QR code: No markerId');
           setShowCamera(false);
         }
       } catch (error) {
-        console.error('Error parsing QR code URL:', error);
         Alert.alert('Error', 'Invalid QR code format');
         setShowCamera(false);
       }
     } else {
-      console.error('QR code does not match expected URL format');
       Alert.alert('Error', 'Invalid QR code: Wrong URL');
       setShowCamera(false);
     }
@@ -230,9 +241,7 @@ export default function Dashboard() {
 
   const getUserDisplayName = () => {
     if (!user) return 'AR Explorer';
-    if (user.firstName && user.lastName) {
-      return `${user.firstName} ${user.lastName}`;
-    }
+    if (user.firstName && user.lastName) return `${user.firstName} ${user.lastName}`;
     if (user.firstName) return user.firstName;
     if (user.email) return user.email.split('@')[0];
     return 'AR Explorer';
@@ -240,15 +249,13 @@ export default function Dashboard() {
 
   const getUserInitials = () => {
     if (!user) return '👤';
-    if (user.firstName && user.lastName) {
-      return `${user.firstName.charAt(0).toUpperCase()}${user.lastName.charAt(0).toUpperCase()}`;
-    }
+    if (user.firstName && user.lastName) return `${user.firstName.charAt(0).toUpperCase()}${user.lastName.charAt(0).toUpperCase()}`;
     if (user.firstName) return user.firstName.charAt(0).toUpperCase();
     if (user.email) return user.email.charAt(0).toUpperCase();
     return '👤';
   };
 
-  const renderARSession = ({ item }: { item: ARSession }) => (
+  const renderARSession = (item: ARSession) => (
     <TouchableOpacity style={styles.sessionCard}>
       <View style={styles.sessionIcon}>
         <Text style={styles.sessionIconText}>{item.icon}</Text>
@@ -274,6 +281,15 @@ export default function Dashboard() {
     );
   };
 
+  const resetARState = () => {
+    setShowCamera(false);
+    setShowImageScanner(false);
+    setMarkerData(null);
+    setMarkerId(null);
+    setIsPreparing(false);
+    setWebViewError(null);
+  };
+
   if (showCamera) {
     if (!permission?.granted) {
       return (
@@ -297,26 +313,92 @@ export default function Dashboard() {
               {permission?.canAskAgain ? 'Request Permission' : 'Open Settings'}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+          <TouchableOpacity style={styles.backButton} onPress={resetARState}>
             <Text style={styles.backButtonText}>Back</Text>
           </TouchableOpacity>
         </View>
       );
     }
 
-    if (!markerData) {
+    if (isPreparing) {
       return (
         <View style={styles.cameraContainer}>
-          <CameraView
-            style={StyleSheet.absoluteFillObject}
-            facing="back"
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr'],
-            }}
-            onBarcodeScanned={({ data }) => handleScan(data)}
-          />
-          <Text style={styles.instructions}>Scan a QR code to start the AR experience</Text>
-          <TouchableOpacity style={styles.backButton} onPress={() => setShowCamera(false)}>
+          <ActivityIndicator size="large" color="#f97316" />
+          <Text style={styles.instructions}>Preparing AR experience...</Text>
+          <TouchableOpacity style={styles.backButton} onPress={resetARState}>
+            <Text style={styles.backButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (showImageScanner && markerData && markerId) {
+      // FIXED: Remove double slash by ensuring clean URL construction
+      const baseUrl = API_URL.replace(/\/+$/, ''); // Remove trailing slashes
+      const arUrl = `${baseUrl}/ar?markerId=${encodeURIComponent(markerId)}`;
+      console.log('Loading AR URL:', arUrl);
+      
+      return (
+        <View style={styles.cameraContainer}>
+          {webViewError ? (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>Failed to load AR experience</Text>
+              <Text style={styles.errorDetails}>{webViewError}</Text>
+              <Text style={styles.errorDetails}>Trying: {arUrl}</Text>
+              <TouchableOpacity 
+                style={styles.retryButton} 
+                onPress={() => {
+                  setWebViewError(null);
+                }}
+              >
+                <Text style={styles.backButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <WebView
+              key={`webview-${markerId}-${Date.now()}`}
+              style={StyleSheet.absoluteFillObject}
+              source={{ uri: arUrl }}
+              allowsInlineMediaPlayback={true}
+              mediaPlaybackRequiresUserAction={false}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              allowsFullscreenVideo={true}
+              mixedContentMode="compatibility"
+              startInLoadingState={true}
+              renderLoading={() => (
+                <View style={styles.errorContainer}>
+                  <ActivityIndicator size="large" color="#f97316" />
+                  <Text style={styles.instructions}>Loading AR experience...</Text>
+                </View>
+              )}
+              onLoadStart={() => console.log('WebView loading started')}
+              onLoad={() => console.log('WebView loaded successfully')}
+              onLoadEnd={() => console.log('WebView loading ended')}
+              onError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                console.error('WebView error:', nativeEvent);
+                setWebViewError(`Error: ${nativeEvent.description || 'Unknown error'}`);
+              }}
+              onHttpError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                console.error('WebView HTTP error:', nativeEvent);
+                setWebViewError(`HTTP ${nativeEvent.statusCode}: ${nativeEvent.description || 'Server error'}`);
+              }}
+              renderError={(errorName) => (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>Failed to load AR experience</Text>
+                  <Text style={styles.errorDetails}>{errorName}</Text>
+                </View>
+              )}
+            />
+          )}
+          
+          <View style={styles.instructionsContainer}>
+            <Text style={styles.instructions}>Point camera at the image to start AR</Text>
+          </View>
+          
+          <TouchableOpacity style={styles.backButton} onPress={resetARState}>
             <Text style={styles.backButtonText}>Back</Text>
           </TouchableOpacity>
         </View>
@@ -325,21 +407,18 @@ export default function Dashboard() {
 
     return (
       <View style={styles.cameraContainer}>
-        <WebView
+        <CameraView
           style={StyleSheet.absoluteFillObject}
-          source={{ uri: `${API_URL}/ar?markerId=${encodeURIComponent(markerId!)}` }}
-          allowsInlineMediaPlayback
-          mediaPlaybackRequiresUserAction={false}
-          onError={(event) => console.error('WebView error:', event.nativeEvent)}
-        />
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            setShowCamera(false);
-            setMarkerData(null);
-            setMarkerId(null);
+          facing="back"
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
           }}
-        >
+          onBarcodeScanned={({ data }) => handleScan(data)}
+        />
+        <View style={styles.instructionsContainer}>
+          <Text style={styles.instructions}>Scan a QR code to start the AR experience</Text>
+        </View>
+        <TouchableOpacity style={styles.backButton} onPress={resetARState}>
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
       </View>
@@ -400,7 +479,7 @@ export default function Dashboard() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent AR Sessions</Text>
             {arSessions.map((session) => (
-              <View key={session.id}>{renderARSession({ item: session })}</View>
+              <View key={session.id}>{renderARSession(session)}</View>
             ))}
           </View>
 
@@ -419,14 +498,12 @@ const styles = StyleSheet.create({
   },
   backgroundGradient: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#1a0a00',
+    backgroundColor: 'rgba(249, 115, 22, 0.1)',
   },
   gridOverlay: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.05,
+    opacity: 0.1,
     backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#f97316',
   },
   arElement1: {
     position: 'absolute',
@@ -435,118 +512,113 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     borderWidth: 2,
     borderColor: '#f97316',
-    top: 60,
-    right: 20,
+    top: '10%',
+    right: '5%',
     opacity: 0.2,
     backgroundColor: 'transparent',
   },
   arElement2: {
     position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
     borderWidth: 2,
-    borderColor: '#fb923c',
-    bottom: 200,
-    left: 30,
-    opacity: 0.3,
+    borderColor: '#f97316',
+    bottom: '15%',
+    left: '5%',
+    opacity: 0.15,
     backgroundColor: 'transparent',
   },
   arElement3: {
     position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     borderWidth: 2,
-    borderColor: '#f59e0b',
-    top: 300,
-    left: 15,
+    borderColor: '#f97316',
+    top: '30%',
+    left: '10%',
     opacity: 0.25,
     backgroundColor: 'transparent',
   },
   scanLine1: {
     position: 'absolute',
     width: '100%',
-    height: 1,
+    height: 2,
     backgroundColor: '#f97316',
-    top: '20%',
     opacity: 0.3,
+    top: '20%',
   },
   scanLine2: {
     position: 'absolute',
     width: '100%',
-    height: 1,
-    backgroundColor: '#fb923c',
-    bottom: '30%',
-    opacity: 0.2,
+    height: 2,
+    backgroundColor: '#f97316',
+    opacity: 0.3,
+    bottom: '20%',
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
+    padding: 20,
     paddingBottom: 100,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
+    alignItems: 'center',
+    marginBottom: 20,
   },
   welcomeSection: {
     flex: 1,
   },
   welcomeText: {
+    color: '#f97316',
     fontSize: 16,
-    color: '#64748b',
-    marginBottom: 4,
+    fontWeight: '600',
   },
   userNameText: {
+    color: '#fff',
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#f1f5f9',
-    marginBottom: 4,
   },
   userEmailText: {
-    fontSize: 12,
-    color: '#64748b',
-    fontStyle: 'italic',
+    color: '#9ca3af',
+    fontSize: 14,
+    marginTop: 4,
   },
   profileButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
-    borderWidth: 2,
-    borderColor: '#f97316',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f97316',
     justifyContent: 'center',
     alignItems: 'center',
   },
   profileIcon: {
-    fontSize: 16,
+    color: '#fff',
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#f97316',
   },
   userCard: {
-    margin: 20,
-    marginTop: 0,
-    padding: 20,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.2)',
+    borderColor: 'rgba(249, 115, 22, 0.2)',
   },
   userCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   userCardTitle: {
+    color: '#fff',
     fontSize: 18,
-    fontWeight: 'bold',
-    color: '#f1f5f9',
+    fontWeight: '600',
   },
   statusIndicator: {
     width: 12,
@@ -559,47 +631,43 @@ const styles = StyleSheet.create({
   userInfoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
   },
   userInfoLabel: {
-    fontSize: 12,
-    color: '#64748b',
+    color: '#9ca3af',
+    fontSize: 14,
   },
   userInfoValue: {
+    color: '#fff',
     fontSize: 14,
-    color: '#f1f5f9',
-    fontWeight: '600',
+    fontWeight: '500',
   },
   section: {
-    marginHorizontal: 20,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#f1f5f9',
-    marginBottom: 16,
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
   },
   sessionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(26, 10, 0, 0.8)',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: 'rgba(249, 115, 22, 0.2)',
-    padding: 16,
-    marginBottom: 12,
   },
   sessionIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
-    borderWidth: 2,
-    borderColor: '#f97316',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f97316',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: 12,
   },
   sessionIconText: {
     fontSize: 20,
@@ -608,51 +676,50 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sessionName: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-    color: '#f1f5f9',
-    marginBottom: 4,
   },
   sessionType: {
+    color: '#9ca3af',
     fontSize: 12,
-    color: '#64748b',
   },
   sessionAction: {
-    width: 30,
-    height: 30,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(249, 115, 22, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   sessionActionText: {
-    fontSize: 16,
     color: '#f97316',
+    fontSize: 16,
   },
   arWorldButton: {
-    marginHorizontal: 20,
+    backgroundColor: '#f97316',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
     marginTop: 20,
     position: 'relative',
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: '#f97316',
-    paddingVertical: 20,
-    borderRadius: 16,
     overflow: 'hidden',
-    alignItems: 'center',
   },
   buttonGlow: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    opacity: 0.3,
   },
   arWorldButtonText: {
+    color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#f97316',
-    letterSpacing: 1,
-    marginBottom: 4,
   },
   arWorldButtonSubtext: {
+    color: '#fff',
     fontSize: 12,
-    color: '#64748b',
+    opacity: 0.7,
+    marginTop: 4,
   },
   cameraContainer: {
     flex: 1,
@@ -660,26 +727,59 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backButton: {
+  instructionsContainer: {
     position: 'absolute',
-    top: 40,
-    left: 20,
-    padding: 10,
-    backgroundColor: 'rgba(249, 115, 22, 0.8)',
-    borderRadius: 8,
-  },
-  backButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    bottom: 100,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 16,
   },
   instructions: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
-    position: 'absolute',
-    bottom: 50,
     textAlign: 'center',
-    width: '100%',
+  },
+  backButton: {
+    position: 'absolute',
+    bottom: 20,
+    backgroundColor: '#f97316',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#000',
+  },
+  errorText: {
+    color: '#f97316',
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  errorDetails: {
+    color: '#fff',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#f97316',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginBottom: 10,
   },
 });
