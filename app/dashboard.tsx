@@ -1,5 +1,6 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as NetInfo from '@react-native-community/netinfo'; // Correct import
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import { initializeApp } from 'firebase/app';
@@ -192,47 +193,58 @@ export default function Dashboard() {
     }
   };
 
-  const fetchMarkerData = async (markerId: string) => {
-    try {
-      setIsPreparing(true);
-      setWebViewError(null);
-      console.log('Fetching marker data for:', markerId);
+ const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
+  try {
+    setIsPreparing(true);
+    setWebViewError(null);
+    console.log('Fetching marker data for:', markerId);
 
-      // Check cache first
-      const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
-      if (cachedData) {
-        console.log('Using cached marker data');
-        setMarkerData(JSON.parse(cachedData));
-        setMarkerId(markerId);
-        setIsPreparing(false);
-        setShowImageScanner(true);
-        return;
-      }
+    const netInfo = await NetInfo.fetch();
+    if (!netInfo.isConnected) {
+      throw new Error('No internet connection');
+    }
 
-      // Fetch from Firebase
-      console.log('Fetching from Firebase...');
-      const docRef = doc(db, 'markers', markerId);
-      const docSnap = await getDoc(docRef);
-      
-      if (docSnap.exists()) {
-        const data = docSnap.data() as MarkerData;
-        console.log('Marker data found:', data);
-        setMarkerData(data);
-        setMarkerId(markerId);
-        await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
-        setIsPreparing(false);
-        setShowImageScanner(true);
-      } else {
-        console.log('Marker not found in Firebase');
-        Alert.alert('Error', 'Marker not found');
-        resetARState();
-      }
-    } catch (error) {
-      console.error('Error fetching marker data:', error);
-      Alert.alert('Error', 'Failed to load marker data');
+    const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
+    if (cachedData) {
+      console.log('Using cached marker data');
+      const data = JSON.parse(cachedData);
+      setMarkerData(data);
+      setMarkerId(markerId);
+      setIsPreparing(false);
+      setShowImageScanner(true);
+      return;
+    }
+
+    console.log('Fetching from Firebase...');
+    const docRef = doc(db, 'markers', markerId);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      const data = docSnap.data() as MarkerData;
+      console.log('Marker data found:', data);
+      setMarkerData(data);
+      setMarkerId(markerId);
+      await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
+      setIsPreparing(false);
+      setShowImageScanner(true);
+    } else {
+      console.log('Marker not found in Firebase');
+      Alert.alert('Error', 'Marker not found');
       resetARState();
     }
-  };
+  } catch (error: any) {
+    console.error('Error fetching marker data:', error.message || error);
+    if (retries > 0 && error.message !== 'No internet connection') {
+      console.log(`Retrying (${retries} attempts left)...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return fetchMarkerData(markerId, retries - 1, delay);
+    }
+    Alert.alert('Error', `Failed to load marker data: ${error.message || 'Check your connection and try again.'}`);
+    if (retries === 0) {
+      resetARState();
+    }
+  }
+};
 
   const handleScan = (data: string) => {
     // Prevent duplicate scans

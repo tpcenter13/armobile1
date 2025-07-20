@@ -4,12 +4,12 @@
     "slug": "arweb1",
     "extra": {
       "apiUrl": "https://arweb-tau.vercel.app/",
-      "firebaseApiKey": "your-api-key",
-      "firebaseAuthDomain": "your-auth-domain",
-      "firebaseProjectId": "your-project-id",
-      "firebaseStorageBucket": "your-storage-bucket",
-      "firebaseMessagingSenderId": "your-sender-id",
-      "firebaseAppId": "your-app-id"
+      "firebaseApiKey": "AIzaSyCefHv0RR9TMIdKkH5SxgTxpUtI_EYLITY",
+      "firebaseAuthDomain": "arweb-8823e.firebaseapp.com",
+      "firebaseProjectId": "arweb-8823e",
+      "firebaseStorageBucket": "arweb-8823e.firebasestorage.app",
+      "firebaseMessagingSenderId": "820420279378",
+      "firebaseAppId": "1:820420279378:web:345273a1393c643968738b"
     },
     "permissions": [
       {
