@@ -1,9 +1,10 @@
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import { initializeApp } from 'firebase/app';
 import { doc, getDoc, getFirestore } from 'firebase/firestore';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -123,6 +124,9 @@ export default function Dashboard() {
   const [markerId, setMarkerId] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [webViewError, setWebViewError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(true);
+  const lastScanRef = useRef<string | null>(null);
+  const scanTimeoutRef = useRef<number | null>(null);
 
   const [arSessions] = useState<ARSession[]>([
     { id: '1', name: '3D Object Scan', duration: '2h 15m', type: 'Object', icon: '📦' },
@@ -133,6 +137,15 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchCurrentUser();
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+      }
+    };
   }, []);
 
   const fetchCurrentUser = async () => {
@@ -183,10 +196,12 @@ export default function Dashboard() {
     try {
       setIsPreparing(true);
       setWebViewError(null);
+      console.log('Fetching marker data for:', markerId);
 
       // Check cache first
       const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
       if (cachedData) {
+        console.log('Using cached marker data');
         setMarkerData(JSON.parse(cachedData));
         setMarkerId(markerId);
         setIsPreparing(false);
@@ -195,47 +210,75 @@ export default function Dashboard() {
       }
 
       // Fetch from Firebase
+      console.log('Fetching from Firebase...');
       const docRef = doc(db, 'markers', markerId);
       const docSnap = await getDoc(docRef);
+      
       if (docSnap.exists()) {
         const data = docSnap.data() as MarkerData;
+        console.log('Marker data found:', data);
         setMarkerData(data);
         setMarkerId(markerId);
-        // Cache data for future scans
         await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
         setIsPreparing(false);
         setShowImageScanner(true);
       } else {
+        console.log('Marker not found in Firebase');
         Alert.alert('Error', 'Marker not found');
-        setShowCamera(false);
-        setIsPreparing(false);
+        resetARState();
       }
     } catch (error) {
       console.error('Error fetching marker data:', error);
       Alert.alert('Error', 'Failed to load marker data');
-      setShowCamera(false);
-      setIsPreparing(false);
+      resetARState();
     }
   };
 
   const handleScan = (data: string) => {
-    if (data.includes('arweb-tau.vercel.app/ar?markerId=')) {
-      try {
-        const url = new URL(data);
+    // Prevent duplicate scans
+    if (!isScanning || lastScanRef.current === data) {
+      return;
+    }
+
+    console.log('QR Code scanned:', data);
+    lastScanRef.current = data;
+    setIsScanning(false);
+
+    // Reset scanning after 3 seconds
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+    }
+    scanTimeoutRef.current = setTimeout(() => {
+      setIsScanning(true);
+      lastScanRef.current = null;
+    }, 3000);
+
+    try {
+      // Check if it's a valid URL first
+      const url = new URL(data);
+      console.log('Parsed URL:', url);
+      
+      // Check if it matches our expected pattern
+      if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
         const markerId = url.searchParams.get('markerId');
+        console.log('Extracted markerId:', markerId);
+        
         if (markerId) {
           fetchMarkerData(markerId);
         } else {
-          Alert.alert('Error', 'Invalid QR code: No markerId');
-          setShowCamera(false);
+          console.log('No markerId in URL');
+          Alert.alert('Error', 'Invalid QR code: No markerId found');
+          setTimeout(() => setIsScanning(true), 2000);
         }
-      } catch (error) {
-        Alert.alert('Error', 'Invalid QR code format');
-        setShowCamera(false);
+      } else {
+        console.log('URL does not match expected pattern');
+        Alert.alert('Error', 'Invalid QR code: Wrong URL format');
+        setTimeout(() => setIsScanning(true), 2000);
       }
-    } else {
-      Alert.alert('Error', 'Invalid QR code: Wrong URL');
-      setShowCamera(false);
+    } catch (error) {
+      console.error('Error parsing QR code:', error);
+      Alert.alert('Error', 'Invalid QR code format');
+      setTimeout(() => setIsScanning(true), 2000);
     }
   };
 
@@ -256,7 +299,7 @@ export default function Dashboard() {
   };
 
   const renderARSession = (item: ARSession) => (
-    <TouchableOpacity style={styles.sessionCard}>
+    <TouchableOpacity style={styles.sessionCard} key={item.id}>
       <View style={styles.sessionIcon}>
         <Text style={styles.sessionIconText}>{item.icon}</Text>
       </View>
@@ -288,6 +331,13 @@ export default function Dashboard() {
     setMarkerId(null);
     setIsPreparing(false);
     setWebViewError(null);
+    setIsScanning(true);
+    lastScanRef.current = null;
+    
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
   };
 
   if (showCamera) {
@@ -313,7 +363,7 @@ export default function Dashboard() {
               {permission?.canAskAgain ? 'Request Permission' : 'Open Settings'}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.backButton} onPress={resetARState}>
+          <TouchableOpacity style={[styles.backButton, { bottom: 80 }]} onPress={resetARState}>
             <Text style={styles.backButtonText}>Back</Text>
           </TouchableOpacity>
         </View>
@@ -333,8 +383,7 @@ export default function Dashboard() {
     }
 
     if (showImageScanner && markerData && markerId) {
-      // FIXED: Remove double slash by ensuring clean URL construction
-      const baseUrl = API_URL.replace(/\/+$/, ''); // Remove trailing slashes
+      const baseUrl = API_URL.replace(/\/+$/, '');
       const arUrl = `${baseUrl}/ar?markerId=${encodeURIComponent(markerId)}`;
       console.log('Loading AR URL:', arUrl);
       
@@ -344,7 +393,7 @@ export default function Dashboard() {
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>Failed to load AR experience</Text>
               <Text style={styles.errorDetails}>{webViewError}</Text>
-              <Text style={styles.errorDetails}>Trying: {arUrl}</Text>
+              <Text style={styles.errorDetails}>URL: {arUrl}</Text>
               <TouchableOpacity 
                 style={styles.retryButton} 
                 onPress={() => {
@@ -413,11 +462,28 @@ export default function Dashboard() {
           barcodeScannerSettings={{
             barcodeTypes: ['qr'],
           }}
-          onBarcodeScanned={({ data }) => handleScan(data)}
+          onBarcodeScanned={isScanning ? ({ data }) => handleScan(data) : undefined}
         />
-        <View style={styles.instructionsContainer}>
-          <Text style={styles.instructions}>Scan a QR code to start the AR experience</Text>
+        
+        {/* Scanning overlay */}
+        <View style={styles.scanningOverlay}>
+          <View style={styles.scanningFrame}>
+            <View style={styles.scanningCorner} />
+            <View style={[styles.scanningCorner, styles.topRight]} />
+            <View style={[styles.scanningCorner, styles.bottomLeft]} />
+            <View style={[styles.scanningCorner, styles.bottomRight]} />
+          </View>
         </View>
+        
+        <View style={styles.instructionsContainer}>
+          <Text style={styles.instructions}>
+            {isScanning ? 'Scan a QR code to start the AR experience' : 'Processing...'}
+          </Text>
+          <Text style={styles.subInstructions}>
+            Make sure the QR code is clearly visible and well-lit
+          </Text>
+        </View>
+        
         <TouchableOpacity style={styles.backButton} onPress={resetARState}>
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
@@ -478,9 +544,7 @@ export default function Dashboard() {
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent AR Sessions</Text>
-            {arSessions.map((session) => (
-              <View key={session.id}>{renderARSession(session)}</View>
-            ))}
+            {arSessions.map((session) => renderARSession(session))}
           </View>
 
           <ARWorldButton onPress={() => setShowCamera(true)} />
@@ -727,19 +791,74 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  scanningOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanningFrame: {
+    width: 250,
+    height: 250,
+    position: 'relative',
+  },
+  scanningCorner: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderColor: '#f97316',
+    borderWidth: 3,
+    top: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  topRight: {
+    top: 0,
+    right: 0,
+    left: 'auto',
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+    borderRightWidth: 3,
+  },
+  bottomLeft: {
+    bottom: 0,
+    left: 0,
+    top: 'auto',
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+    borderBottomWidth: 3,
+  },
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    top: 'auto',
+    left: 'auto',
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+    borderRightWidth: 3,
+    borderBottomWidth: 3,
+  },
   instructionsContainer: {
     position: 'absolute',
-    bottom: 100,
+    bottom: 120,
     left: 0,
     right: 0,
     alignItems: 'center',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     padding: 16,
+    marginHorizontal: 20,
+    borderRadius: 8,
   },
   instructions: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  subInstructions: {
+    color: '#9ca3af',
+    fontSize: 12,
     textAlign: 'center',
   },
   backButton: {
