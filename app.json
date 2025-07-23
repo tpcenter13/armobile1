@@ -4,19 +4,17 @@
     "slug": "arweb1",
     "extra": {
       "apiUrl": "https://arweb-tau.vercel.app/",
-      "firebaseApiKey": "AIzaSyCefHv0RR9TMIdKkH5SxgTxpUtI_EYLITY",
-      "firebaseAuthDomain": "arweb-8823e.firebaseapp.com",
-      "firebaseProjectId": "arweb-8823e",
-      "firebaseStorageBucket": "arweb-8823e.firebasestorage.app",
-      "firebaseMessagingSenderId": "820420279378",
-      "firebaseAppId": "1:820420279378:web:345273a1393c643968738b"
-    },
-    "permissions": [
-      {
-        "name": "camera",
-        "description": "Allow access to the camera to enable AR features."
+      "firebaseApiKey": "...",
+      "firebaseAuthDomain": "...",
+      "firebaseProjectId": "...",
+      "firebaseStorageBucket": "...",
+      "firebaseMessagingSenderId": "...",
+      "firebaseAppId": "...",
+      "router": {},
+      "eas": {
+        "projectId": "e056a633-b3b8-4267-8094-35bf9bf48168"
       }
-    ],
+    },
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -31,7 +29,11 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.tpcenter13.arweb1",
+      "permissions": [
+        "CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
