@@ -192,7 +192,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
+const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
   try {
     setIsPreparing(true);
     setWebViewError(null);
@@ -203,103 +203,138 @@ export default function Dashboard() {
       throw new Error('No internet connection');
     }
 
+    // Check cached data first
     const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
+    
     if (cachedData) {
-      console.log('Using cached marker data');
-      const data = JSON.parse(cachedData);
-      // Fix: Use imageUrl as fallback for patternUrl
-      if (!data.patternUrl) {
-        data.patternUrl = data.imageUrl;
-        console.log('No patternUrl in cached data, using imageUrl as fallback');
+      try {
+        const data = JSON.parse(cachedData);
+        if (isValidMarkerData(data)) {
+          console.log('Using valid cached marker data');
+          setMarkerData(data);
+          setMarkerId(markerId);
+          setIsPreparing(false);
+          setShowImageScanner(true);
+          return;
+        } else {
+          console.log('Cached data is invalid, clearing cache and fetching fresh data');
+          await AsyncStorage.removeItem(`marker_${markerId}`);
+        }
+      } catch (parseError) {
+        console.log('Error parsing cached data, clearing cache');
+        await AsyncStorage.removeItem(`marker_${markerId}`);
       }
-      setMarkerData(data);
-      setMarkerId(markerId);
-      setIsPreparing(false);
-      setShowImageScanner(true);
-      return;
     }
 
-    console.log('Fetching from Firebase...');
+    // Fetch fresh data from Firebase
+    console.log('Fetching fresh data from Firebase...');
     const docRef = doc(db, 'markers', markerId);
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists()) {
       const data = docSnap.data() as MarkerData;
-      console.log('Marker data found:', data);
+      console.log('Fresh marker data found:', data);
       
-      // Fix: Use imageUrl as fallback for patternUrl
-      if (!data.patternUrl) {
-        data.patternUrl = data.imageUrl;
-        console.log('No patternUrl found, using imageUrl as fallback');
+      if (!isValidMarkerData(data)) {
+        throw new Error('Invalid marker data structure from Firestore');
+      }
+      
+      // If patternUrl is PNG, warn but continue (for backward compatibility)
+      if (data.patternUrl && !data.patternUrl.endsWith('.patt')) {
+        console.warn('Warning: patternUrl does not end with .patt, this may cause AR tracking issues');
+        console.warn('Consider using NFT tracking or generating proper .patt files');
       }
       
       setMarkerData(data);
       setMarkerId(markerId);
+      
+      // Cache the valid data
       await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
+      
       setIsPreparing(false);
       setShowImageScanner(true);
     } else {
       console.log('Marker not found in Firebase');
-      Alert.alert('Error', 'Marker not found');
+      Alert.alert('Error', 'Marker not found in database');
       resetARState();
     }
   } catch (error: any) {
     console.error('Error fetching marker data:', error.message || error);
-    if (retries > 0 && error.message !== 'No internet connection') {
+    
+    // Only retry for network errors, not validation errors
+    if (retries > 0 && 
+        !error.message.includes('Invalid') && 
+        error.message !== 'No internet connection' &&
+        error.message !== 'Marker not found in database') {
       console.log(`Retrying (${retries} attempts left)...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return fetchMarkerData(markerId, retries - 1, delay);
     }
+    
     Alert.alert('Error', `Failed to load marker data: ${error.message || 'Check your connection and try again.'}`);
-    if (retries === 0) {
-      resetARState();
-    }
+    resetARState();
   }
 };
 
-  const handleScan = (data: string) => {
-    if (!isScanning || lastScanRef.current === data) {
-      return;
-    }
+// Helper function to validate marker data
+const isValidMarkerData = (data: any): data is MarkerData => {
+  return (
+    data &&
+    typeof data.imageUrl === 'string' && 
+    data.imageUrl.startsWith('http') &&
+    typeof data.videoUrl === 'string' && 
+    data.videoUrl.startsWith('http') &&
+    typeof data.patternUrl === 'string' && 
+    data.patternUrl.startsWith('http')
+  );
+};
 
-    console.log('QR Code scanned:', data);
-    lastScanRef.current = data;
-    setIsScanning(false);
+ const handleScan = (data: string) => {
+  if (!isScanning || lastScanRef.current === data) {
+    return;
+  }
 
-    if (scanTimeoutRef.current) {
-      clearTimeout(scanTimeoutRef.current);
-    }
-    scanTimeoutRef.current = setTimeout(() => {
-      setIsScanning(true);
-      lastScanRef.current = null;
-    }, 3000);
+  console.log('QR Code scanned:', data);
+  lastScanRef.current = data;
+  setIsScanning(false);
 
-    try {
-      const url = new URL(data);
-      console.log('Parsed URL:', url);
+  if (scanTimeoutRef.current) {
+    clearTimeout(scanTimeoutRef.current);
+  }
+  scanTimeoutRef.current = setTimeout(() => {
+    setIsScanning(true);
+    lastScanRef.current = null;
+  }, 3000);
+
+  try {
+    const url = new URL(data);
+    console.log('Parsed URL:', url);
+    
+    if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
+      const markerId = url.searchParams.get('markerId');
+      console.log('Extracted markerId:', markerId);
       
-      if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
-        const markerId = url.searchParams.get('markerId');
-        console.log('Extracted markerId:', markerId);
-        
-        if (markerId) {
+      if (markerId) {
+        // Clear cache for fresh scan to ensure we get latest data
+        clearMarkerCache(markerId).then(() => {
           fetchMarkerData(markerId);
-        } else {
-          console.log('No markerId in URL');
-          Alert.alert('Error', 'Invalid QR code: No markerId found');
-          setTimeout(() => setIsScanning(true), 2000);
-        }
+        });
       } else {
-        console.log('URL does not match expected pattern');
-        Alert.alert('Error', 'Invalid QR code: Wrong URL format');
+        console.log('No markerId in URL');
+        Alert.alert('Error', 'Invalid QR code: No markerId found');
         setTimeout(() => setIsScanning(true), 2000);
       }
-    } catch (error) {
-      console.error('Error parsing QR code:', error);
-      Alert.alert('Error', 'Invalid QR code format');
+    } else {
+      console.log('URL does not match expected pattern');
+      Alert.alert('Error', 'Invalid QR code: Wrong URL format');
       setTimeout(() => setIsScanning(true), 2000);
     }
-  };
+  } catch (error) {
+    console.error('Error parsing QR code:', error);
+    Alert.alert('Error', 'Invalid QR code format');
+    setTimeout(() => setIsScanning(true), 2000);
+  }
+};
 
   const getUserDisplayName = () => {
     if (!user) return 'AR Explorer';
@@ -404,279 +439,128 @@ export default function Dashboard() {
     // Fixed WebView AR Implementation
     if (showImageScanner && markerData && markerId) {
       // Create inline HTML for AR
-      const arHTML = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-          <title>AR Experience</title>
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.0/aframe.min.js"></script>
-          <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
-          <style>
-            body { margin: 0; background: transparent; overflow: hidden; }
-            .loading { 
-              position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-              color: white; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 8px; 
-              text-align: center; z-index: 1000; 
-            }
-            .debug { 
-              position: fixed; top: 10px; left: 10px; right: 10px; 
-              background: rgba(0,0,0,0.8); color: white; padding: 10px; 
-              border-radius: 5px; font-size: 12px; z-index: 999; 
-            }
-          </style>
-        </head>
-        <body>
-          <div id="loading" class="loading">
-            <div>📱 Initializing AR...</div>
-            <div style="font-size: 12px; margin-top: 10px;">Point camera at marker image</div>
-          </div>
+      
+if (!markerData?.patternUrl || !markerData?.videoUrl) {
+  throw new Error("Missing or invalid marker data");
+}
 
-          <div id="debug" class="debug" style="display: none;">
-            <div id="status">🔍 Searching for marker...</div>
-            <div style="font-size: 10px; margin-top: 5px;" id="info">Marker: ${markerId.substring(0, 8)}...</div>
-          </div>
+const patternUrl = markerData.patternUrl.replace(/\.(png|jpg|jpeg)$/i, '');
 
-          <a-scene
-            vr-mode-ui="enabled: false"
-            arjs="sourceType: webcam; debugUIEnabled: true; detectionMode: mono_and_matrix; matrixCodeType: 3x3; trackingMethod: best; maxDetectionRate: 60; canvasWidth: 640; canvasHeight: 480;"
-            embedded
-            renderer="logarithmicDepthBuffer: true; colorManagement: true; sortObjects: true; antialias: true; alpha: true; precision: mediump;"
-            style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;"
-          >
-            <a-assets>
-              <img id="marker-image" src="${markerData.imageUrl}" crossorigin="anonymous">
-              <video
-                id="ar-video"
-                src="${markerData.videoUrl}"
-                preload="metadata"
-                loop
-                crossorigin="anonymous"
-                webkit-playsinline="true"
-                playsinline
-                muted
-                style="display: none;"
-              ></video>
-            </a-assets>
+const arHTML = ` 
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>AR Experience</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #loading {
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+      z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading AR Scene...</div>
 
-            <a-camera 
-              gps-camera 
-              rotation-reader
-              arjs-look-controls="smoothingFactor: 0.1"
-            ></a-camera>
+  <a-scene
+    vr-mode-ui="enabled: false"
+    arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3; trackingMethod: best; maxDetectionRate: 60; canvasWidth: 640; canvasHeight: 480;"
+    embedded
+    renderer="logarithmicDepthBuffer: true; colorManagement: true; sortObjects: true; antialias: true; alpha: true; precision: mediump;"
+    style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;"
+  >
+    <a-assets>
+      <video
+        id="ar-video"
+        src="${markerData.videoUrl}"
+        preload="auto"
+        loop
+        crossorigin="anonymous"
+        webkit-playsinline="true"
+        playsinline
+        muted="true"
+        autoplay="false"
+        style="display: none;"
+      ></video>
+    </a-assets>
 
-            <!-- Use the patternUrl for custom marker -->
-            <a-marker 
-              type="pattern" 
-              url="${markerData.patternUrl}"
-              registerevents="true" 
-              id="custom-marker"
-              smooth="true"
-              smoothCount="10"
-              smoothTolerance="0.01"
-              smoothThreshold="5"
-            >
-              <a-plane
-                position="0 0 0"
-                rotation="-90 0 0"
-                width="2"
-                height="1.5"
-                material="src: #ar-video; transparent: true; alphaTest: 0.1; opacity: 0.9;"
-                animation__found="property: scale; to: 1.1 1.1 1.1; startEvents: markerFound; dur: 300"
-                animation__lost="property: scale; to: 1 1 1; startEvents: markerLost; dur: 300"
-              ></a-plane>
-              
-              <!-- Success indicator -->
-              <a-text 
-                value="🎯 AR ACTIVE!" 
-                position="0 1.2 0" 
-                color="#00ff88" 
-                scale="0.6 0.6 0.6"
-                align="center"
-                animation__pulse="property: scale; to: 0.7 0.7 0.7; dir: alternate; dur: 1000; loop: true"
-              ></a-text>
-            </a-marker>
+    <a-camera 
+      gps-camera 
+      rotation-reader
+      arjs-look-controls="smoothingFactor: 0.1"
+    ></a-camera>
 
-            <!-- Fallback: Hiro marker for testing -->
-            <a-marker 
-              preset="hiro" 
-              registerevents="true" 
-              id="hiro-fallback"
-              smooth="true"
-            >
-              <a-plane
-                position="0 0 0"
-                rotation="-90 0 0"
-                width="2"
-                height="1.5"
-                material="src: #ar-video; transparent: true; alphaTest: 0.1;"
-              ></a-plane>
-              <a-text 
-                value="HIRO MARKER (FALLBACK)" 
-                position="0 1.2 0" 
-                color="#ffaa00" 
-                scale="0.4 0.4 0.4"
-                align="center"
-              ></a-text>
-            </a-marker>
-          </a-scene>
+    <a-nft
+      type="nft"
+      url="${patternUrl}"
+      smooth="true"
+      smoothCount="10"
+      smoothTolerance="0.01"
+      smoothThreshold="5"
+      registerevents="true" 
+      id="nft-marker"
+    >
+      <a-plane
+        position="0 0 0.1"
+        rotation="-90 0 0"
+        width="3"
+        height="2.25"
+        material="src: #ar-video; transparent: true; alphaTest: 0.5; opacity: 1;"
+        animation__found="property: scale; to: 1.1 1.1 1.1; startEvents: markerFound; dur: 300"
+        animation__lost="property: scale; to: 1 1 1; startEvents: markerLost; dur: 300"
+      ></a-plane>
+      <a-text 
+        value="🎯 AR ACTIVE!" 
+        position="0 1.5 0" 
+        color="#00ff88" 
+        scale="0.6 0.6 0.6"
+        align="center"
+        animation__pulse="property: scale; to: 0.7 0.7 0.7; dir: alternate; dur: 1000; loop: true"
+      ></a-text>
+    </a-nft>
+  </a-scene>
 
-          <script>
-            let markerFound = false;
-            let videoElement = null;
-            
-            navigator.mediaDevices.getUserMedia({ video: true })
-              .then(stream => console.log('Camera access granted'))
-              .catch(err => console.error('Camera access error:', err.message));
-            
-            document.addEventListener('DOMContentLoaded', function() {
-              try {
-                const scene = document.querySelector('a-scene');
-                if (!scene) {
-                  throw new Error('A-Frame scene not found');
-                }
-                scene.addEventListener('loaded', () => console.log('A-Frame scene loaded'));
-                scene.addEventListener('error', (e) => console.error('A-Frame error:', e.message));
+  <script>
+    window.addEventListener('load', () => {
+      const loading = document.getElementById('loading');
+      if (loading) loading.style.display = 'none';
+    });
 
-                const arjs = scene.systems['arjs'];
-                if (!arjs) {
-                  throw new Error('AR.js system not initialized');
-                }
-                console.log('AR.js initialized');
-
-                setTimeout(function() {
-                  document.getElementById('loading').style.display = 'none';
-                  document.getElementById('debug').style.display = 'block';
-                  
-                  videoElement = document.querySelector('#ar-video');
-                  const customMarker = document.querySelector('#custom-marker');
-                  const hiroMarker = document.querySelector('#hiro-fallback');
-                  
-                  console.log('AR Scene initialized');
-                  
-                  if (videoElement) {
-                    videoElement.addEventListener('loadeddata', function() {
-                      console.log('Video loaded successfully');
-                    });
-                    
-                    videoElement.addEventListener('error', function(e) {
-                      console.error('Video error:', e);
-                    });
-                    
-                    videoElement.load();
-                  }
-                  
-                  function handleMarkerFound(markerType) {
-                    if (!markerFound) {
-                      markerFound = true;
-                      document.getElementById('status').innerHTML = '🎯 Marker Found!';
-                      console.log(markerType + ' marker found!');
-                      
-                      if (window.ReactNativeWebView) {
-                        window.ReactNativeWebView.postMessage(JSON.stringify({ 
-                          type: 'markerFound',
-                          marker: markerType
-                        }));
-                      }
-                      
-                      if (videoElement) {
-                        videoElement.currentTime = 0;
-                        const playPromise = videoElement.play();
-                        if (playPromise) {
-                          playPromise.catch(function(error) {
-                            console.log('Video autoplay prevented:', error);
-                            const playBtn = document.createElement('button');
-                            playBtn.innerHTML = '▶ Play AR Video';
-                            playBtn.style.cssText = 'position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #f97316; color: white; padding: 15px 25px; border: none; border-radius: 8px; font-size: 16px; z-index: 1001; cursor: pointer;';
-                            playBtn.onclick = function() {
-                              videoElement.play();
-                              document.body.removeChild(playBtn);
-                            };
-                            document.body.appendChild(playBtn);
-                          });
-                        }
-                      }
-                    }
-                  }
-                  
-                  function handleMarkerLost(markerType) {
-                    if (markerFound) {
-                      markerFound = false;
-                      document.getElementById('status').innerHTML = '🔍 Searching for marker...';
-                      console.log(markerType + ' marker lost');
-                      
-                      if (window.ReactNativeWebView) {
-                        window.ReactNativeWebView.postMessage(JSON.stringify({ 
-                          type: 'markerLost',
-                          marker: markerType
-                        }));
-                      }
-                      
-                      if (videoElement) {
-                        videoElement.pause();
-                      }
-                    }
-                  }
-                  
-                  if (customMarker) {
-                    customMarker.addEventListener('markerFound', function() {
-                      handleMarkerFound('custom');
-                    });
-                    
-                    customMarker.addEventListener('markerLost', function() {
-                      handleMarkerLost('custom');
-                    });
-                  }
-                  
-                  if (hiroMarker) {
-                    hiroMarker.addEventListener('markerFound', function() {
-                      handleMarkerFound('hiro');
-                    });
-                    
-                    hiroMarker.addEventListener('markerLost', function() {
-                      handleMarkerLost('hiro');
-                    });
-                  }
-                  
-                  setInterval(function() {
-                    const scene = document.querySelector('a-scene');
-                    if (scene && scene.is && scene.is('loaded')) {
-                      const info = document.getElementById('info');
-                      if (info) {
-                        info.innerHTML = 'Scene: ✅ | Video: ' + (videoElement && videoElement.readyState >= 2 ? '✅' : '⏳') + ' | Marker: ' + (markerFound ? '🎯' : '🔍');
-                      }
-                    }
-                  }, 1000);
-                  
-                }, 2000);
-              } catch (error) {
-                console.error('AR initialization error:', error.message);
-                if (window.ReactNativeWebView) {
-                  window.ReactNativeWebView.postMessage(JSON.stringify({ 
-                    type: 'error',
-                    message: 'AR initialization failed: ' + error.message
-                  }));
-                }
-              }
-            });
-            
-            window.onerror = function(message, source, lineno, colno, error) {
-              console.error('Error:', message, source, lineno, error ? error.stack : 'No stack');
-              if (window.ReactNativeWebView) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({ 
-                  type: 'error',
-                  message: message,
-                  source: source,
-                  line: lineno,
-                  stack: error ? error.stack : 'No stack'
-                }));
-              }
-            };
-          </script>
-        </body>
-        </html>
-      `;
+    const nftMarker = document.querySelector('#nft-marker');
+    
+    if (nftMarker) {
+      nftMarker.addEventListener('markerFound', function() {
+        const video = document.querySelector('#ar-video');
+        if (video && video.paused) {
+          video.play();
+        }
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ status: 'markerFound' }));
+      });
+      
+      nftMarker.addEventListener('markerLost', function() {
+        const video = document.querySelector('#ar-video');
+        if (video && !video.paused) {
+          video.pause();
+        }
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ status: 'markerLost' }));
+      });
+    }
+  </script>
+</body>
+</html>
+`;
 
       return (
         <View style={styles.cameraContainer}>
@@ -711,50 +595,76 @@ export default function Dashboard() {
               </TouchableOpacity>
             </View>
           ) : (
-            <WebView
-              key={`webview-${markerId}`}
-              style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]}
-              source={{ html: arHTML }}
-              allowsInlineMediaPlaybook={true}
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              allowsFullscreenVideo={true}
-              mixedContentMode="compatibility"
-              allowsAccessToCamera={true}
-              androidHardwareAccelerationDisabled={false}
-              androidLayerType="hardware"
-              onMessage={(event) => {
-                try {
-                  const message = JSON.parse(event.nativeEvent.data);
-                  console.log('WebView message:', message);
-                  
-                  switch(message.type) {
-                    case 'markerFound':
-                      console.log(`🎯 ${message.marker} marker found!`);
-                      break;
-                    case 'markerLost':
-                      console.log(`❌ ${message.marker} marker lost`);
-                      break;
-                    case 'error':
-                      console.error('AR Error:', message);
-                      setWebViewError(`AR Error: ${message.message}`);
-                      break;
-                  }
-                } catch (e) {
-                  console.log('WebView raw message:', event.nativeEvent.data);
-                }
-              }}
-              onError={(syntheticEvent) => {
-                console.error('WebView error:', syntheticEvent.nativeEvent);
-                setWebViewError(`Error: ${syntheticEvent.nativeEvent.description || 'Unknown error'}`);
-              }}
-              onHttpError={(syntheticEvent) => {
-                console.error('WebView HTTP error:', syntheticEvent.nativeEvent);
-                setWebViewError(`HTTP ${syntheticEvent.nativeEvent.statusCode}: ${syntheticEvent.nativeEvent.description || 'Server error'}`);
-              }}
-            />
+<WebView
+  key={`webview-${markerId}`}
+  style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]}
+  source={{ html: arHTML }}
+  allowsInlineMediaPlaybook={true}
+  mediaPlaybackRequiresUserAction={false}
+  javaScriptEnabled={true}
+  domStorageEnabled={true}
+  allowsFullscreenVideo={true}
+  mixedContentMode="compatibility"
+  allowsAccessToCamera={true}
+  androidHardwareAccelerationDisabled={false}
+  androidLayerType="hardware"
+  onMessage={(event) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+      console.log('📨 WebView message:', message);
+
+      switch (message.type) {
+        case 'markerFound':
+          console.log(`🎯 ${message.marker} marker detected!`);
+          // Optional: Add haptic feedback
+          break;
+          
+        case 'markerLost':
+          console.log(`❌ ${message.marker} marker lost`);
+          break;
+          
+        case 'videoAutoPlaySuccess':
+          console.log('✅ Video autoplay successful!');
+          // Show success message or update UI
+          Alert.alert(
+            '🎬 AR Video Started!',
+            'Your AR experience is now active. Keep the marker in view.',
+            [{ text: 'Great!' }]
+          );
+          break;
+          
+        case 'videoAutoPlayFailed':
+          console.log('❌ Video autoplay failed:', message.error);
+          Alert.alert(
+            '🎬 AR Video Ready',
+            'Video is loaded but requires user interaction. Tap anywhere on the screen to start.',
+            [{ text: 'OK' }]
+          );
+          break;
+          
+        case 'videoError':
+          console.error('❌ Video error:', message);
+          setWebViewError(`Video Error: ${message.error}`);
+          break;
+          
+        case 'initializationError':
+          console.error('❌ AR initialization error:', message);
+          setWebViewError(`Initialization Error: ${message.message}`);
+          break;
+          
+        case 'globalError':
+          console.error('❌ Global AR error:', message);
+          setWebViewError(`AR Error: ${message.message}`);
+          break;
+      }
+    } catch (e) {
+      console.log('📨 WebView raw message:', event.nativeEvent.data);
+    }
+  }}
+/>
+
           )}
+          
           
                  <View style={styles.instructionsContainer}>
             <Text style={styles.instructions}>Point camera at your marker image</Text>
@@ -874,6 +784,14 @@ export default function Dashboard() {
     </>
   );
 }
+const clearMarkerCache = async (markerId: string) => {
+  try {
+    await AsyncStorage.removeItem(`marker_${markerId}`);
+    console.log('Cache cleared for marker:', markerId);
+  } catch (error) {
+    console.error('Error clearing cache:', error);
+  }
+};
 
 const styles = StyleSheet.create({
   container: {
