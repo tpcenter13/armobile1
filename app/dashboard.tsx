@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as NetInfo from '@react-native-community/netinfo';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import { initializeApp } from 'firebase/app';
 import { doc, getDoc, getFirestore } from 'firebase/firestore';
@@ -128,6 +128,7 @@ export default function Dashboard() {
   const [isScanning, setIsScanning] = useState(true);
   const lastScanRef = useRef<string | null>(null);
   const scanTimeoutRef = useRef<number | null>(null);
+  const [hasScanned, setHasScanned] = useState(false);
 
   const [arSessions] = useState<ARSession[]>([
     { id: '1', name: '3D Object Scan', duration: '2h 15m', type: 'Object', icon: '📦' },
@@ -135,6 +136,14 @@ export default function Dashboard() {
     { id: '3', name: 'Face Tracking', duration: '1h 30m', type: 'Tracking', icon: '👤' },
     { id: '4', name: 'AR Markers', duration: '3h 20m', type: 'Markers', icon: '🎯' },
   ]);
+
+  const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
+    if (hasScanned) return;
+
+    setHasScanned(true);
+    console.log("QR Code scanned:", data);
+    handleScan(data);
+  };
 
   useEffect(() => {
     fetchCurrentUser();
@@ -196,7 +205,6 @@ export default function Dashboard() {
     }
   };
 
-  // Updated fetchMarkerData with API fallback
   const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
     try {
       setIsPreparing(true);
@@ -208,7 +216,6 @@ export default function Dashboard() {
         throw new Error('No internet connection');
       }
 
-      // Check cache first
       const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
       if (cachedData) {
         try {
@@ -230,7 +237,6 @@ export default function Dashboard() {
         }
       }
 
-      // Try API first (since it's working)
       try {
         console.log('Fetching from API...');
         const response = await fetch(`${API_URL}/api/get-marker?markerId=${markerId}`, {
@@ -238,7 +244,6 @@ export default function Dashboard() {
           headers: {
             'Content-Type': 'application/json',
           },
-         
         });
 
         if (response.ok) {
@@ -261,7 +266,6 @@ export default function Dashboard() {
       } catch (apiError) {
         console.log('API failed, trying Firebase...', apiError);
         
-        // Fallback to Firebase
         try {
           const docRef = doc(db, 'markers', markerId);
           const docSnap = await getDoc(docRef);
@@ -333,15 +337,14 @@ export default function Dashboard() {
     scanTimeoutRef.current = setTimeout(() => {
       setIsScanning(true);
       lastScanRef.current = null;
-    }, 5000);
+    }, 5000) as any;
 
     try {
       const url = new URL(data);
       console.log('Parsed URL:', url.toString());
 
-      if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
-        const markerId = url.searchParams.get('markerId');
-        console.log('Extracted markerId:', markerId);
+      if (url.hostname === 'arweb-tau.vercel.app' && url.pathname.startsWith('/ar/')) {
+        const markerId = url.pathname.split('/ar/')[1];
 
         if (markerId) {
           clearMarkerCache(markerId).then(() => {
@@ -414,6 +417,7 @@ export default function Dashboard() {
     setIsPreparing(false);
     setWebViewError(null);
     setIsScanning(true);
+    setHasScanned(false);
     lastScanRef.current = null;
 
     if (scanTimeoutRef.current) {
@@ -504,361 +508,114 @@ export default function Dashboard() {
         );
       }
 
-      // Fixed AR HTML - Using marker-based tracking instead of NFT
       const arHTML = `
 <!DOCTYPE html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <title>AR Experience</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.5/aframe/build/aframe-ar.min.js"></script>
-  <style>
-    body { 
-      margin: 0; 
-      overflow: hidden; 
-      font-family: Arial, sans-serif;
-    }
-    #loading {
-      position: fixed;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.85);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-size: 18px;
-      z-index: 9999;
-      text-align: center;
-    }
-    .loading-spinner {
-      border: 4px solid rgba(255,255,255,0.3);
-      border-top: 4px solid #f97316;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      animation: spin 1s linear infinite;
-      margin-bottom: 20px;
-    }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-    #arDebug {
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      background: rgba(0,0,0,0.7);
-      color: white;
-      padding: 10px;
-      border-radius: 5px;
-      font-size: 12px;
-      z-index: 1000;
-      max-width: 200px;
-    }
-  </style>
-</head>
-<body>
-  <div id="loading">
-    <div class="loading-spinner"></div>
-    <div>Loading AR Scene...</div>
-    <div style="font-size: 14px; margin-top: 10px; opacity: 0.7;">
-      Initializing camera and AR tracking
-    </div>
-  </div>
-
-  <div id="arDebug" style="display: none;">
-    <div>Status: <span id="arStatus">Initializing...</span></div>
-    <div>Marker: <span id="markerStatus">Not found</span></div>
-    <div>Video: <span id="videoStatus">Loading...</span></div>
-  </div>
-
-  <a-scene
-    vr-mode-ui="enabled: false"
-    arjs="sourceType: webcam; 
-          debugUIEnabled: false; 
-          detectionMode: mono_and_matrix; 
-          matrixCodeType: 3x3; 
-          trackingMethod: best; 
-          maxDetectionRate: 60; 
-          canvasWidth: 640; 
-          canvasHeight: 480;
-          displayWidth: 640;
-          displayHeight: 480;"
-    embedded
-    renderer="logarithmicDepthBuffer: true; 
-             colorManagement: true; 
-             sortObjects: true; 
-             antialias: true; 
-             alpha: true; 
-             precision: mediump;
-             powerPreference: default;"
-    style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;"
-    loading-screen="enabled: false"
-  >
-    <a-assets>
-      <video
-        id="ar-video"
-        src="${markerData.videoUrl}"
-        preload="auto"
-        loop
-        crossorigin="anonymous"
-        webkit-playsinline="true"
-        playsinline
-        muted="true"
-        autoplay="false"
-        style="display: none;"
-      ></video>
-    </a-assets>
-
-    <a-camera
-      gps-camera
-      rotation-reader
-      arjs-look-controls="smoothingFactor: 0.1"
-      camera="fov: 80; near: 0.01; far: 1000;"
-    ></a-camera>
-
-    <a-marker
-      type="pattern"
-      url="${markerData.patternUrl}"
-      smooth="true"
-      smoothCount="10"
-      smoothTolerance="0.01"
-      smoothThreshold="5"
-      registerevents="true"
-      id="pattern-marker"
-      emitevents="true"
-      cursor="rayOrigin: mouse"
+  <head>
+    <meta charset="utf-8" />
+    <title>AR Marker Video Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ar.js@3.4.2/aframe/build/aframe-ar.min.js"></script>
+  </head>
+  <body style="margin: 0; overflow: hidden;">
+    <a-scene
+      embedded
+      vr-mode-ui="enabled: false"
+      renderer="logarithmicDepthBuffer: true;"
+      arjs="trackingMethod: best; sourceType: webcam; debugUIEnabled: false;"
     >
-      <!-- Video plane -->
-      <a-plane
-        position="0 0 0.01"
-        rotation="-90 0 0"
-        width="2"
-        height="1.5"
-        material="src: #ar-video; 
-                 transparent: true; 
-                 alphaTest: 0.5; 
-                 opacity: 1;
-                 shader: flat;"
-        animation__found="property: scale; 
-                         to: 1.1 1.1 1.1; 
-                         startEvents: markerFound; 
-                         dur: 300;
-                         easing: easeOutCubic"
-        animation__lost="property: scale; 
-                        to: 1 1 1; 
-                        startEvents: markerLost; 
-                        dur: 300;
-                        easing: easeInCubic"
-        id="video-plane"
-      ></a-plane>
-      
-      <!-- Status text -->
-      <a-text
-        id="status-text"
-        value="🎯 AR ACTIVE!"
-        position="0 1.2 0"
-        color="#00ff88"
-        scale="0.5 0.5 0.5"
-        align="center"
-        font="kelsonsans"
-        animation__pulse="property: scale; 
-                         to: 0.6 0.6 0.6; 
-                         dir: alternate; 
-                         dur: 1000; 
-                         loop: true;
-                         easing: easeInOutSine"
-      ></a-text>
+      <!-- Pattern Marker -->
+      <a-marker
+        id="marker"
+        type="pattern"
+        preset="custom"
+        url="YOUR_PATTERN_URL.patt"
+        raycaster="objects: .clickable"
+        emitevents="true"
+      >
+        <!-- Assets (video element) -->
+        <a-assets>
+          <video
+            id="ar-video"
+            src="YOUR_VIDEO_URL.mp4"
+            preload="auto"
+            crossorigin="anonymous"
+            playsinline
+            webkit-playsinline
+            autoplay="false"
+            loop
+          ></video>
+        </a-assets>
 
-      <!-- Border frame -->
-      <a-box
-        position="0 0 -0.01"
-        width="2.1"
-        height="1.6"
-        depth="0.02"
-        color="#f97316"
-        opacity="0.3"
-        material="transparent: true"
-      ></a-box>
-    </a-marker>
-  </a-scene>
+        <!-- Plane for video, initially hidden -->
+        <a-plane
+          id="video-plane"
+          visible="false"
+          position="0 0 0.01"
+          rotation="-90 0 0"
+          width="2"
+          height="1.5"
+          material="src: #ar-video; transparent: true; alphaTest: 0.5; opacity: 1; shader: flat;"
+          animation__found="property: scale; to: 1.1 1.1 1.1; startEvents: markerFound; dur: 300; easing: easeOutCubic"
+          animation__lost="property: scale; to: 1 1 1; startEvents: markerLost; dur: 300; easing: easeInCubic"
+        ></a-plane>
+      </a-marker>
 
-  <script>
-    let isLoaded = false;
-    let markerFound = false;
-    let videoLoaded = false;
-    let debugMode = false; // Set to true for debugging
+      <!-- Camera -->
+      <a-entity camera></a-entity>
+    </a-scene>
 
-    // Show debug info if enabled
-    if (debugMode) {
-      document.getElementById('arDebug').style.display = 'block';
-    }
+    <script>
+      const marker = document.querySelector("#marker");
+      const video = document.querySelector("#ar-video");
+      const videoPlane = document.querySelector("#video-plane");
 
-    function updateStatus(status) {
-      if (debugMode) {
-        document.getElementById('arStatus').textContent = status;
-      }
-      console.log('AR Status:', status);
-    }
+      marker.addEventListener("markerFound", () => {
+        console.log("🎯 Pattern marker found!");
+        videoPlane.setAttribute("visible", "true");
 
-    function updateMarkerStatus(status) {
-      if (debugMode) {
-        document.getElementById('markerStatus').textContent = status;
-      }
-    }
-
-    function updateVideoStatus(status) {
-      if (debugMode) {
-        document.getElementById('videoStatus').textContent = status;
-      }
-    }
-
-    // Hide loading screen when everything is ready
-    function hideLoading() {
-      const loading = document.getElementById('loading');
-      if (loading && isLoaded) {
-        loading.style.opacity = '0';
-        setTimeout(() => {
-          loading.style.display = 'none';
-        }, 300);
-      }
-    }
-
-    // Scene loaded
-    document.querySelector('a-scene').addEventListener('loaded', () => {
-      console.log('A-Frame scene loaded');
-      updateStatus('Scene loaded');
-      isLoaded = true;
-      hideLoading();
-    });
-
-    // AR system ready
-    document.querySelector('a-scene').addEventListener('arjs-video-loaded', () => {
-      console.log('AR.js video loaded');
-      updateStatus('AR system ready');
-    });
-
-    // Marker events
-    const marker = document.querySelector('#pattern-marker');
-    if (marker) {
-      marker.addEventListener('markerFound', () => {
-        console.log('🎯 Pattern marker found!');
-        markerFound = true;
-        updateMarkerStatus('Found');
-        
-        const video = document.querySelector('#ar-video');
         if (video && video.paused) {
           video.currentTime = 0;
           video.play().then(() => {
-            console.log('✅ Video started playing');
-            updateVideoStatus('Playing');
-            window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-              type: 'markerFound',
-              message: 'Pattern marker detected and video started'
-            }));
+            console.log("✅ Video started playing");
+            window.ReactNativeWebView?.postMessage(
+              JSON.stringify({
+                type: "markerFound",
+                message: "Pattern marker detected and video started",
+              })
+            );
           }).catch((e) => {
-            console.error('❌ Video play failed:', e);
-            updateVideoStatus('Play failed');
-            window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-              type: 'videoAutoPlayFailed', 
-              error: e.message 
-            }));
+            console.error("❌ Video play failed:", e);
+            window.ReactNativeWebView?.postMessage(
+              JSON.stringify({
+                type: "videoAutoPlayFailed",
+                error: e.message,
+              })
+            );
           });
         }
       });
 
-      marker.addEventListener('markerLost', () => {
-        console.log('❌ Pattern marker lost');
-        markerFound = false;
-        updateMarkerStatus('Lost');
-        
-        const video = document.querySelector('#ar-video');
+      marker.addEventListener("markerLost", () => {
+        console.log("❌ Pattern marker lost");
+        videoPlane.setAttribute("visible", "false");
+
         if (video && !video.paused) {
           video.pause();
-          updateVideoStatus('Paused');
         }
-        
-        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-          type: 'markerLost',
-          message: 'Pattern marker lost'
-        }));
+
+        window.ReactNativeWebView?.postMessage(
+          JSON.stringify({
+            type: "markerLost",
+            message: "Pattern marker lost",
+          })
+        );
       });
-    }
-
-    // Video events
-    const video = document.querySelector('#ar-video');
-    if (video) {
-      video.addEventListener('loadstart', () => {
-        console.log('Video loading started');
-        updateVideoStatus('Loading...');
-      });
-
-      video.addEventListener('canplay', () => {
-        console.log('✅ Video can play');
-        videoLoaded = true;
-        updateVideoStatus('Ready');
-        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-          type: 'videoLoaded',
-          message: 'Video is ready to play'
-        }));
-      });
-
-      video.addEventListener('error', (e) => {
-        console.error('❌ Video error:', e);
-        updateVideoStatus('Error');
-        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-          type: 'videoError', 
-          error: e.message || 'Video failed to load'
-        }));
-      });
-
-      video.addEventListener('play', () => {
-        console.log('▶️ Video started playing');
-        updateVideoStatus('Playing');
-      });
-
-      video.addEventListener('pause', () => {
-        console.log('⏸️ Video paused');
-        updateVideoStatus('Paused');
-      });
-    }
-
-    // Error handling
-    window.addEventListener('error', (e) => {
-      console.error('❌ Global error:', e);
-      window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-        type: 'globalError', 
-        message: e.error?.message || e.message || 'Unknown error'
-      }));
-    });
-
-    // AR.js error handling
-    window.addEventListener('arjs-error', (e) => {
-      console.error('❌ AR.js error:', e);
-      window.ReactNativeWebView?.postMessage(JSON.stringify({ 
-        type: 'initializationError', 
-        message: e.detail?.message || 'AR initialization failed'
-      }));
-    });
-
-    // Timeout for loading
-    setTimeout(() => {
-      if (!isLoaded) {
-        console.warn('Scene taking too long to load');
-        updateStatus('Loading timeout');
-        hideLoading();
-      }
-    }, 10000);
-
-    console.log('AR.js script initialized');
-    updateStatus('Initializing...');
-  </script>
-</body>
+    </script>
+  </body>
 </html>
+
 `;
 
       return (
@@ -985,7 +742,7 @@ export default function Dashboard() {
           barcodeScannerSettings={{
             barcodeTypes: ['qr'],
           }}
-          onBarcodeScanned={isScanning ? ({ data }) => handleScan(data) : undefined}
+          onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
         />
         <View style={styles.scanningOverlay}>
           <View style={styles.scanningFrame}>
@@ -1073,7 +830,6 @@ export default function Dashboard() {
   );
 }
 
-// Add the styles object
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1348,7 +1104,7 @@ const styles = StyleSheet.create({
   topRight: {
     top: 0,
     right: 0,
-    left: 'auto',
+    left: undefined,
     borderLeftWidth: 0,
     borderRightWidth: 3,
     borderBottomWidth: 0,
@@ -1356,7 +1112,7 @@ const styles = StyleSheet.create({
   bottomLeft: {
     bottom: 0,
     left: 0,
-    top: 'auto',
+    top: undefined,
     borderRightWidth: 0,
     borderTopWidth: 0,
     borderBottomWidth: 3,
@@ -1364,8 +1120,8 @@ const styles = StyleSheet.create({
   bottomRight: {
     bottom: 0,
     right: 0,
-    top: 'auto',
-    left: 'auto',
+    top: undefined,
+    left: undefined,
     borderLeftWidth: 0,
     borderTopWidth: 0,
     borderRightWidth: 3,
