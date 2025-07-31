@@ -15,7 +15,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -138,6 +138,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchCurrentUser();
+    const unsubscribe = NetInfo.addEventListener(state => {
+      console.log('Network state changed:', state.isConnected);
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -192,149 +196,173 @@ export default function Dashboard() {
     }
   };
 
-const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
-  try {
-    setIsPreparing(true);
-    setWebViewError(null);
-    console.log('Fetching marker data for:', markerId);
+  // Updated fetchMarkerData with API fallback
+  const fetchMarkerData = async (markerId: string, retries = 3, delay = 2000) => {
+    try {
+      setIsPreparing(true);
+      setWebViewError(null);
+      console.log('Fetching marker data for:', markerId);
 
-    const netInfo = await NetInfo.fetch();
-    if (!netInfo.isConnected) {
-      throw new Error('No internet connection');
-    }
+      const netInfo = await NetInfo.fetch();
+      if (!netInfo.isConnected) {
+        throw new Error('No internet connection');
+      }
 
-    // Check cached data first
-    const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
-    
-    if (cachedData) {
-      try {
-        const data = JSON.parse(cachedData);
-        if (isValidMarkerData(data)) {
-          console.log('Using valid cached marker data');
-          setMarkerData(data);
-          setMarkerId(markerId);
-          setIsPreparing(false);
-          setShowImageScanner(true);
-          return;
-        } else {
-          console.log('Cached data is invalid, clearing cache and fetching fresh data');
+      // Check cache first
+      const cachedData = await AsyncStorage.getItem(`marker_${markerId}`);
+      if (cachedData) {
+        try {
+          const data = JSON.parse(cachedData);
+          if (isValidMarkerData(data)) {
+            console.log('Using valid cached marker data');
+            setMarkerData(data);
+            setMarkerId(markerId);
+            setIsPreparing(false);
+            setShowImageScanner(true);
+            return;
+          } else {
+            console.log('Cached data is invalid, clearing cache');
+            await AsyncStorage.removeItem(`marker_${markerId}`);
+          }
+        } catch (parseError) {
+          console.log('Error parsing cached data, clearing cache');
           await AsyncStorage.removeItem(`marker_${markerId}`);
         }
-      } catch (parseError) {
-        console.log('Error parsing cached data, clearing cache');
-        await AsyncStorage.removeItem(`marker_${markerId}`);
       }
-    }
 
-    // Fetch fresh data from Firebase
-    console.log('Fetching fresh data from Firebase...');
-    const docRef = doc(db, 'markers', markerId);
-    const docSnap = await getDoc(docRef);
+      // Try API first (since it's working)
+      try {
+        console.log('Fetching from API...');
+        const response = await fetch(`${API_URL}/api/get-marker?markerId=${markerId}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+         
+        });
 
-    if (docSnap.exists()) {
-      const data = docSnap.data() as MarkerData;
-      console.log('Fresh marker data found:', data);
+        if (response.ok) {
+          const data = await response.json();
+          console.log('API marker data:', data);
+
+          if (isValidMarkerData(data)) {
+            setMarkerData(data);
+            setMarkerId(markerId);
+            await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
+            setIsPreparing(false);
+            setShowImageScanner(true);
+            return;
+          } else {
+            throw new Error('Invalid marker data structure from API');
+          }
+        } else {
+          throw new Error(`API request failed with status: ${response.status}`);
+        }
+      } catch (apiError) {
+        console.log('API failed, trying Firebase...', apiError);
+        
+        // Fallback to Firebase
+        try {
+          const docRef = doc(db, 'markers', markerId);
+          const docSnap = await getDoc(docRef);
+
+          if (docSnap.exists()) {
+            const data = docSnap.data() as MarkerData;
+            console.log('Firebase marker data:', data);
+
+            if (!isValidMarkerData(data)) {
+              throw new Error('Invalid marker data structure from Firestore');
+            }
+
+            setMarkerData(data);
+            setMarkerId(markerId);
+            await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
+            setIsPreparing(false);
+            setShowImageScanner(true);
+            return;
+          } else {
+            throw new Error('Marker not found in Firebase');
+          }
+        } catch (firebaseError) {
+          console.error('Firebase also failed:', firebaseError);
+          throw new Error('Both API and Firebase failed to fetch marker data');
+        }
+      }
+    } catch (error: any) {
+      console.error('Error fetching marker data:', error.message || error);
       
-      if (!isValidMarkerData(data)) {
-        throw new Error('Invalid marker data structure from Firestore');
+      if (retries > 0 && !error.message.includes('Invalid') && 
+          error.message !== 'No internet connection' && 
+          !error.message.includes('not found')) {
+        console.log(`Retrying (${retries} attempts left)...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchMarkerData(markerId, retries - 1, delay * 1.5);
       }
       
-      // If patternUrl is PNG, warn but continue (for backward compatibility)
-      if (data.patternUrl && !data.patternUrl.endsWith('.patt')) {
-        console.warn('Warning: patternUrl does not end with .patt, this may cause AR tracking issues');
-        console.warn('Consider using NFT tracking or generating proper .patt files');
-      }
-      
-      setMarkerData(data);
-      setMarkerId(markerId);
-      
-      // Cache the valid data
-      await AsyncStorage.setItem(`marker_${markerId}`, JSON.stringify(data));
-      
-      setIsPreparing(false);
-      setShowImageScanner(true);
-    } else {
-      console.log('Marker not found in Firebase');
-      Alert.alert('Error', 'Marker not found in database');
+      Alert.alert(
+        'Error', 
+        `Failed to load marker data: ${error.message || 'Check your connection and try again.'}`
+      );
       resetARState();
     }
-  } catch (error: any) {
-    console.error('Error fetching marker data:', error.message || error);
-    
-    // Only retry for network errors, not validation errors
-    if (retries > 0 && 
-        !error.message.includes('Invalid') && 
-        error.message !== 'No internet connection' &&
-        error.message !== 'Marker not found in database') {
-      console.log(`Retrying (${retries} attempts left)...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return fetchMarkerData(markerId, retries - 1, delay);
+  };
+
+  const isValidMarkerData = (data: any): data is MarkerData => {
+    return (
+      data &&
+      typeof data.imageUrl === 'string' &&
+      data.imageUrl.startsWith('http') &&
+      typeof data.videoUrl === 'string' &&
+      data.videoUrl.startsWith('http') &&
+      (data.patternUrl === undefined || (typeof data.patternUrl === 'string' && data.patternUrl.startsWith('http')))
+    );
+  };
+
+  const handleScan = (data: string) => {
+    if (!isScanning || lastScanRef.current === data) {
+      return;
     }
-    
-    Alert.alert('Error', `Failed to load marker data: ${error.message || 'Check your connection and try again.'}`);
-    resetARState();
-  }
-};
 
-// Helper function to validate marker data
-const isValidMarkerData = (data: any): data is MarkerData => {
-  return (
-    data &&
-    typeof data.imageUrl === 'string' && 
-    data.imageUrl.startsWith('http') &&
-    typeof data.videoUrl === 'string' && 
-    data.videoUrl.startsWith('http') &&
-    typeof data.patternUrl === 'string' && 
-    data.patternUrl.startsWith('http')
-  );
-};
+    console.log('QR Code scanned:', data);
+    lastScanRef.current = data;
+    setIsScanning(false);
 
- const handleScan = (data: string) => {
-  if (!isScanning || lastScanRef.current === data) {
-    return;
-  }
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+    }
+    scanTimeoutRef.current = setTimeout(() => {
+      setIsScanning(true);
+      lastScanRef.current = null;
+    }, 5000);
 
-  console.log('QR Code scanned:', data);
-  lastScanRef.current = data;
-  setIsScanning(false);
+    try {
+      const url = new URL(data);
+      console.log('Parsed URL:', url.toString());
 
-  if (scanTimeoutRef.current) {
-    clearTimeout(scanTimeoutRef.current);
-  }
-  scanTimeoutRef.current = setTimeout(() => {
-    setIsScanning(true);
-    lastScanRef.current = null;
-  }, 3000);
+      if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
+        const markerId = url.searchParams.get('markerId');
+        console.log('Extracted markerId:', markerId);
 
-  try {
-    const url = new URL(data);
-    console.log('Parsed URL:', url);
-    
-    if (url.hostname === 'arweb-tau.vercel.app' && url.pathname === '/ar') {
-      const markerId = url.searchParams.get('markerId');
-      console.log('Extracted markerId:', markerId);
-      
-      if (markerId) {
-        // Clear cache for fresh scan to ensure we get latest data
-        clearMarkerCache(markerId).then(() => {
-          fetchMarkerData(markerId);
-        });
+        if (markerId) {
+          clearMarkerCache(markerId).then(() => {
+            fetchMarkerData(markerId);
+          });
+        } else {
+          console.log('No markerId in URL');
+          Alert.alert('Error', 'Invalid QR code: No markerId found');
+          setTimeout(() => setIsScanning(true), 2000);
+        }
       } else {
-        console.log('No markerId in URL');
-        Alert.alert('Error', 'Invalid QR code: No markerId found');
+        console.log('URL does not match expected pattern');
+        Alert.alert('Error', 'Invalid QR code: Wrong URL format');
         setTimeout(() => setIsScanning(true), 2000);
       }
-    } else {
-      console.log('URL does not match expected pattern');
-      Alert.alert('Error', 'Invalid QR code: Wrong URL format');
+    } catch (error) {
+      console.error('Error parsing QR code:', error);
+      Alert.alert('Error', 'Invalid QR code format');
       setTimeout(() => setIsScanning(true), 2000);
     }
-  } catch (error) {
-    console.error('Error parsing QR code:', error);
-    Alert.alert('Error', 'Invalid QR code format');
-    setTimeout(() => setIsScanning(true), 2000);
-  }
-};
+  };
 
   const getUserDisplayName = () => {
     if (!user) return 'AR Explorer';
@@ -387,10 +415,19 @@ const isValidMarkerData = (data: any): data is MarkerData => {
     setWebViewError(null);
     setIsScanning(true);
     lastScanRef.current = null;
-    
+
     if (scanTimeoutRef.current) {
       clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = null;
+    }
+  };
+
+  const clearMarkerCache = async (markerId: string) => {
+    try {
+      await AsyncStorage.removeItem(`marker_${markerId}`);
+      console.log('Cache cleared for marker:', markerId);
+    } catch (error) {
+      console.error('Error clearing cache:', error);
     }
   };
 
@@ -436,17 +473,39 @@ const isValidMarkerData = (data: any): data is MarkerData => {
       );
     }
 
-    // Fixed WebView AR Implementation
     if (showImageScanner && markerData && markerId) {
-      // Create inline HTML for AR
-      
-if (!markerData?.patternUrl || !markerData?.videoUrl) {
-  throw new Error("Missing or invalid marker data");
-}
+      if (!markerData.patternUrl || !markerData.videoUrl) {
+        setWebViewError('Missing or invalid marker data');
+        return (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>Failed to load AR experience</Text>
+            <Text style={styles.errorDetails}>{webViewError}</Text>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => {
+                setWebViewError(null);
+                AsyncStorage.removeItem(`marker_${markerId}`);
+                fetchMarkerData(markerId);
+              }}
+            >
+              <Text style={styles.backButtonText}>Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.backButton, { bottom: 80 }]}
+              onPress={async () => {
+                await AsyncStorage.removeItem(`marker_${markerId}`);
+                Alert.alert('Cache cleared', 'Please rescan the QR code.');
+                resetARState();
+              }}
+            >
+              <Text style={styles.backButtonText}>Clear Cache</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
 
-const patternUrl = markerData.patternUrl.replace(/\.(png|jpg|jpeg)$/i, '');
-
-const arHTML = ` 
+      // Fixed AR HTML - Using marker-based tracking instead of NFT
+      const arHTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -454,32 +513,91 @@ const arHTML = `
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>AR Experience</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.5/aframe/build/aframe-ar.min.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { 
+      margin: 0; 
+      overflow: hidden; 
+      font-family: Arial, sans-serif;
+    }
     #loading {
       position: fixed;
       width: 100%;
       height: 100%;
       background: rgba(0,0,0,0.85);
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       color: white;
-      font-size: 20px;
+      font-size: 18px;
       z-index: 9999;
+      text-align: center;
+    }
+    .loading-spinner {
+      border: 4px solid rgba(255,255,255,0.3);
+      border-top: 4px solid #f97316;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #arDebug {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-size: 12px;
+      z-index: 1000;
+      max-width: 200px;
     }
   </style>
 </head>
 <body>
-  <div id="loading">Loading AR Scene...</div>
+  <div id="loading">
+    <div class="loading-spinner"></div>
+    <div>Loading AR Scene...</div>
+    <div style="font-size: 14px; margin-top: 10px; opacity: 0.7;">
+      Initializing camera and AR tracking
+    </div>
+  </div>
+
+  <div id="arDebug" style="display: none;">
+    <div>Status: <span id="arStatus">Initializing...</span></div>
+    <div>Marker: <span id="markerStatus">Not found</span></div>
+    <div>Video: <span id="videoStatus">Loading...</span></div>
+  </div>
 
   <a-scene
     vr-mode-ui="enabled: false"
-    arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3; trackingMethod: best; maxDetectionRate: 60; canvasWidth: 640; canvasHeight: 480;"
+    arjs="sourceType: webcam; 
+          debugUIEnabled: false; 
+          detectionMode: mono_and_matrix; 
+          matrixCodeType: 3x3; 
+          trackingMethod: best; 
+          maxDetectionRate: 60; 
+          canvasWidth: 640; 
+          canvasHeight: 480;
+          displayWidth: 640;
+          displayHeight: 480;"
     embedded
-    renderer="logarithmicDepthBuffer: true; colorManagement: true; sortObjects: true; antialias: true; alpha: true; precision: mediump;"
+    renderer="logarithmicDepthBuffer: true; 
+             colorManagement: true; 
+             sortObjects: true; 
+             antialias: true; 
+             alpha: true; 
+             precision: mediump;
+             powerPreference: default;"
     style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;"
+    loading-screen="enabled: false"
   >
     <a-assets>
       <video
@@ -496,67 +614,248 @@ const arHTML = `
       ></video>
     </a-assets>
 
-    <a-camera 
-      gps-camera 
+    <a-camera
+      gps-camera
       rotation-reader
       arjs-look-controls="smoothingFactor: 0.1"
+      camera="fov: 80; near: 0.01; far: 1000;"
     ></a-camera>
 
-    <a-nft
-      type="nft"
-      url="${patternUrl}"
+    <a-marker
+      type="pattern"
+      url="${markerData.patternUrl}"
       smooth="true"
       smoothCount="10"
       smoothTolerance="0.01"
       smoothThreshold="5"
-      registerevents="true" 
-      id="nft-marker"
+      registerevents="true"
+      id="pattern-marker"
+      emitevents="true"
+      cursor="rayOrigin: mouse"
     >
+      <!-- Video plane -->
       <a-plane
-        position="0 0 0.1"
+        position="0 0 0.01"
         rotation="-90 0 0"
-        width="3"
-        height="2.25"
-        material="src: #ar-video; transparent: true; alphaTest: 0.5; opacity: 1;"
-        animation__found="property: scale; to: 1.1 1.1 1.1; startEvents: markerFound; dur: 300"
-        animation__lost="property: scale; to: 1 1 1; startEvents: markerLost; dur: 300"
+        width="2"
+        height="1.5"
+        material="src: #ar-video; 
+                 transparent: true; 
+                 alphaTest: 0.5; 
+                 opacity: 1;
+                 shader: flat;"
+        animation__found="property: scale; 
+                         to: 1.1 1.1 1.1; 
+                         startEvents: markerFound; 
+                         dur: 300;
+                         easing: easeOutCubic"
+        animation__lost="property: scale; 
+                        to: 1 1 1; 
+                        startEvents: markerLost; 
+                        dur: 300;
+                        easing: easeInCubic"
+        id="video-plane"
       ></a-plane>
-      <a-text 
-        value="🎯 AR ACTIVE!" 
-        position="0 1.5 0" 
-        color="#00ff88" 
-        scale="0.6 0.6 0.6"
+      
+      <!-- Status text -->
+      <a-text
+        id="status-text"
+        value="🎯 AR ACTIVE!"
+        position="0 1.2 0"
+        color="#00ff88"
+        scale="0.5 0.5 0.5"
         align="center"
-        animation__pulse="property: scale; to: 0.7 0.7 0.7; dir: alternate; dur: 1000; loop: true"
+        font="kelsonsans"
+        animation__pulse="property: scale; 
+                         to: 0.6 0.6 0.6; 
+                         dir: alternate; 
+                         dur: 1000; 
+                         loop: true;
+                         easing: easeInOutSine"
       ></a-text>
-    </a-nft>
+
+      <!-- Border frame -->
+      <a-box
+        position="0 0 -0.01"
+        width="2.1"
+        height="1.6"
+        depth="0.02"
+        color="#f97316"
+        opacity="0.3"
+        material="transparent: true"
+      ></a-box>
+    </a-marker>
   </a-scene>
 
   <script>
-    window.addEventListener('load', () => {
+    let isLoaded = false;
+    let markerFound = false;
+    let videoLoaded = false;
+    let debugMode = false; // Set to true for debugging
+
+    // Show debug info if enabled
+    if (debugMode) {
+      document.getElementById('arDebug').style.display = 'block';
+    }
+
+    function updateStatus(status) {
+      if (debugMode) {
+        document.getElementById('arStatus').textContent = status;
+      }
+      console.log('AR Status:', status);
+    }
+
+    function updateMarkerStatus(status) {
+      if (debugMode) {
+        document.getElementById('markerStatus').textContent = status;
+      }
+    }
+
+    function updateVideoStatus(status) {
+      if (debugMode) {
+        document.getElementById('videoStatus').textContent = status;
+      }
+    }
+
+    // Hide loading screen when everything is ready
+    function hideLoading() {
       const loading = document.getElementById('loading');
-      if (loading) loading.style.display = 'none';
+      if (loading && isLoaded) {
+        loading.style.opacity = '0';
+        setTimeout(() => {
+          loading.style.display = 'none';
+        }, 300);
+      }
+    }
+
+    // Scene loaded
+    document.querySelector('a-scene').addEventListener('loaded', () => {
+      console.log('A-Frame scene loaded');
+      updateStatus('Scene loaded');
+      isLoaded = true;
+      hideLoading();
     });
 
-    const nftMarker = document.querySelector('#nft-marker');
-    
-    if (nftMarker) {
-      nftMarker.addEventListener('markerFound', function() {
+    // AR system ready
+    document.querySelector('a-scene').addEventListener('arjs-video-loaded', () => {
+      console.log('AR.js video loaded');
+      updateStatus('AR system ready');
+    });
+
+    // Marker events
+    const marker = document.querySelector('#pattern-marker');
+    if (marker) {
+      marker.addEventListener('markerFound', () => {
+        console.log('🎯 Pattern marker found!');
+        markerFound = true;
+        updateMarkerStatus('Found');
+        
         const video = document.querySelector('#ar-video');
         if (video && video.paused) {
-          video.play();
+          video.currentTime = 0;
+          video.play().then(() => {
+            console.log('✅ Video started playing');
+            updateVideoStatus('Playing');
+            window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+              type: 'markerFound',
+              message: 'Pattern marker detected and video started'
+            }));
+          }).catch((e) => {
+            console.error('❌ Video play failed:', e);
+            updateVideoStatus('Play failed');
+            window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+              type: 'videoAutoPlayFailed', 
+              error: e.message 
+            }));
+          });
         }
-        window.ReactNativeWebView?.postMessage(JSON.stringify({ status: 'markerFound' }));
       });
-      
-      nftMarker.addEventListener('markerLost', function() {
+
+      marker.addEventListener('markerLost', () => {
+        console.log('❌ Pattern marker lost');
+        markerFound = false;
+        updateMarkerStatus('Lost');
+        
         const video = document.querySelector('#ar-video');
         if (video && !video.paused) {
           video.pause();
+          updateVideoStatus('Paused');
         }
-        window.ReactNativeWebView?.postMessage(JSON.stringify({ status: 'markerLost' }));
+        
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+          type: 'markerLost',
+          message: 'Pattern marker lost'
+        }));
       });
     }
+
+    // Video events
+    const video = document.querySelector('#ar-video');
+    if (video) {
+      video.addEventListener('loadstart', () => {
+        console.log('Video loading started');
+        updateVideoStatus('Loading...');
+      });
+
+      video.addEventListener('canplay', () => {
+        console.log('✅ Video can play');
+        videoLoaded = true;
+        updateVideoStatus('Ready');
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+          type: 'videoLoaded',
+          message: 'Video is ready to play'
+        }));
+      });
+
+      video.addEventListener('error', (e) => {
+        console.error('❌ Video error:', e);
+        updateVideoStatus('Error');
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+          type: 'videoError', 
+          error: e.message || 'Video failed to load'
+        }));
+      });
+
+      video.addEventListener('play', () => {
+        console.log('▶️ Video started playing');
+        updateVideoStatus('Playing');
+      });
+
+      video.addEventListener('pause', () => {
+        console.log('⏸️ Video paused');
+        updateVideoStatus('Paused');
+      });
+    }
+
+    // Error handling
+    window.addEventListener('error', (e) => {
+      console.error('❌ Global error:', e);
+      window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+        type: 'globalError', 
+        message: e.error?.message || e.message || 'Unknown error'
+      }));
+    });
+
+    // AR.js error handling
+    window.addEventListener('arjs-error', (e) => {
+      console.error('❌ AR.js error:', e);
+      window.ReactNativeWebView?.postMessage(JSON.stringify({ 
+        type: 'initializationError', 
+        message: e.detail?.message || 'AR initialization failed'
+      }));
+    });
+
+    // Timeout for loading
+    setTimeout(() => {
+      if (!isLoaded) {
+        console.warn('Scene taking too long to load');
+        updateStatus('Loading timeout');
+        hideLoading();
+      }
+    }, 10000);
+
+    console.log('AR.js script initialized');
+    updateStatus('Initializing...');
   </script>
 </body>
 </html>
@@ -568,13 +867,12 @@ const arHTML = `
             style={StyleSheet.absoluteFillObject}
             facing="back"
           />
-          
           {webViewError ? (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>Failed to load AR experience</Text>
               <Text style={styles.errorDetails}>{webViewError}</Text>
-              <TouchableOpacity 
-                style={styles.retryButton} 
+              <TouchableOpacity
+                style={styles.retryButton}
                 onPress={() => {
                   setWebViewError(null);
                   AsyncStorage.removeItem(`marker_${markerId}`);
@@ -583,8 +881,8 @@ const arHTML = `
               >
                 <Text style={styles.backButtonText}>Retry</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.backButton, { bottom: 80 }]} 
+              <TouchableOpacity
+                style={[styles.backButton, { bottom: 80 }]}
                 onPress={async () => {
                   await AsyncStorage.removeItem(`marker_${markerId}`);
                   Alert.alert('Cache cleared', 'Please rescan the QR code.');
@@ -595,78 +893,75 @@ const arHTML = `
               </TouchableOpacity>
             </View>
           ) : (
-<WebView
-  key={`webview-${markerId}`}
-  style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]}
-  source={{ html: arHTML }}
-  allowsInlineMediaPlaybook={true}
-  mediaPlaybackRequiresUserAction={false}
-  javaScriptEnabled={true}
-  domStorageEnabled={true}
-  allowsFullscreenVideo={true}
-  mixedContentMode="compatibility"
-  allowsAccessToCamera={true}
-  androidHardwareAccelerationDisabled={false}
-  androidLayerType="hardware"
-  onMessage={(event) => {
-    try {
-      const message = JSON.parse(event.nativeEvent.data);
-      console.log('📨 WebView message:', message);
+            <WebView
+              key={`webview-${markerId}`}
+              style={[StyleSheet.absoluteFillObject, { backgroundColor: 'transparent' }]}
+              source={{ html: arHTML }}
+              allowsInlineMediaPlayback={true}
+              mediaPlaybackRequiresUserAction={false}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              allowsFullscreenVideo={true}
+              mixedContentMode="compatibility"
+              allowsAccessToCamera={true}
+              androidHardwareAccelerationDisabled={false}
+              androidLayerType="hardware"
+              cacheEnabled={false}
+              incognito={true}
+              onLoad={() => console.log('WebView loaded successfully')}
+              onError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                console.log('WebView error:', nativeEvent);
+                setWebViewError(`WebView Error: ${nativeEvent.description || 'Unknown error'}`);
+              }}
+              onHttpError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                console.log('WebView HTTP error:', nativeEvent);
+                setWebViewError(`HTTP Error: ${nativeEvent.statusCode} - ${nativeEvent.description}`);
+              }}
+              onMessage={(event) => {
+                try {
+                  const message = JSON.parse(event.nativeEvent.data);
+                  console.log('📨 WebView message:', message);
 
-      switch (message.type) {
-        case 'markerFound':
-          console.log(`🎯 ${message.marker} marker detected!`);
-          // Optional: Add haptic feedback
-          break;
-          
-        case 'markerLost':
-          console.log(`❌ ${message.marker} marker lost`);
-          break;
-          
-        case 'videoAutoPlaySuccess':
-          console.log('✅ Video autoplay successful!');
-          // Show success message or update UI
-          Alert.alert(
-            '🎬 AR Video Started!',
-            'Your AR experience is now active. Keep the marker in view.',
-            [{ text: 'Great!' }]
-          );
-          break;
-          
-        case 'videoAutoPlayFailed':
-          console.log('❌ Video autoplay failed:', message.error);
-          Alert.alert(
-            '🎬 AR Video Ready',
-            'Video is loaded but requires user interaction. Tap anywhere on the screen to start.',
-            [{ text: 'OK' }]
-          );
-          break;
-          
-        case 'videoError':
-          console.error('❌ Video error:', message);
-          setWebViewError(`Video Error: ${message.error}`);
-          break;
-          
-        case 'initializationError':
-          console.error('❌ AR initialization error:', message);
-          setWebViewError(`Initialization Error: ${message.message}`);
-          break;
-          
-        case 'globalError':
-          console.error('❌ Global AR error:', message);
-          setWebViewError(`AR Error: ${message.message}`);
-          break;
-      }
-    } catch (e) {
-      console.log('📨 WebView raw message:', event.nativeEvent.data);
-    }
-  }}
-/>
-
+                  switch (message.type) {
+                    case 'markerFound':
+                      console.log('🎯 Marker detected!', message.message);
+                      break;
+                    case 'markerLost':
+                      console.log('❌ Marker lost:', message.message);
+                      break;
+                    case 'videoAutoPlayFailed':
+                      console.log('❌ Video autoplay failed:', message.error);
+                      Alert.alert(
+                        '🎬 AR Video Ready',
+                        'Video is loaded but requires user interaction. Tap anywhere on the screen to start.',
+                        [{ text: 'OK' }]
+                      );
+                      break;
+                    case 'videoError':
+                      console.error('❌ Video error:', message);
+                      setWebViewError(`Video Error: ${message.error}`);
+                      break;
+                    case 'initializationError':
+                      console.error('❌ AR initialization error:', message);
+                      setWebViewError(`Initialization Error: ${message.message}`);
+                      break;
+                    case 'globalError':
+                      console.error('❌ Global AR error:', message);
+                      setWebViewError(`AR Error: ${message.message}`);
+                      break;
+                    case 'videoLoaded':
+                      console.log('✅ Video loaded successfully');
+                      break;
+                  }
+                } catch (e) {
+                  console.log('📨 WebView raw message:', event.nativeEvent.data);
+                }
+              }}
+            />
           )}
-          
-          
-                 <View style={styles.instructionsContainer}>
+          <View style={styles.instructionsContainer}>
             <Text style={styles.instructions}>Point camera at your marker image</Text>
             <Text style={styles.subInstructions}>
               Keep the marker image centered and well-lit
@@ -675,7 +970,6 @@ const arHTML = `
               Marker ID: {markerId?.substring(0, 8)}...
             </Text>
           </View>
-          
           <TouchableOpacity style={styles.backButton} onPress={resetARState}>
             <Text style={styles.backButtonText}>Back</Text>
           </TouchableOpacity>
@@ -683,7 +977,6 @@ const arHTML = `
       );
     }
 
-    // QR Code Scanner
     return (
       <View style={styles.cameraContainer}>
         <CameraView
@@ -693,8 +986,7 @@ const arHTML = `
             barcodeTypes: ['qr'],
           }}
           onBarcodeScanned={isScanning ? ({ data }) => handleScan(data) : undefined}
-         />
-        
+        />
         <View style={styles.scanningOverlay}>
           <View style={styles.scanningFrame}>
             <View style={styles.scanningCorner} />
@@ -703,7 +995,6 @@ const arHTML = `
             <View style={[styles.scanningCorner, styles.bottomRight]} />
           </View>
         </View>
-        
         <View style={styles.instructionsContainer}>
           <Text style={styles.instructions}>
             {isScanning ? 'Scan a QR code to start the AR experience' : 'Processing...'}
@@ -712,15 +1003,12 @@ const arHTML = `
             Make sure the QR code is clearly visible and well-lit
           </Text>
         </View>
-        
         <TouchableOpacity style={styles.backButton} onPress={resetARState}>
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
       </View>
     );
   }
-
-  
 
   return (
     <>
@@ -784,144 +1072,144 @@ const arHTML = `
     </>
   );
 }
-const clearMarkerCache = async (markerId: string) => {
-  try {
-    await AsyncStorage.removeItem(`marker_${markerId}`);
-    console.log('Cache cleared for marker:', markerId);
-  } catch (error) {
-    console.error('Error clearing cache:', error);
-  }
-};
 
+// Add the styles object
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a0a00',
-    position: 'relative',
+    backgroundColor: '#0a0a0a',
   },
   backgroundGradient: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '60%',
+    backgroundColor: '#1a0a00',
+    opacity: 0.8,
   },
   gridOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     opacity: 0.1,
     backgroundColor: 'transparent',
   },
   arElement1: {
     position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 2,
-    borderColor: '#f97316',
-    top: '10%',
-    right: '5%',
-    opacity: 0.2,
-    backgroundColor: 'transparent',
+    top: 100,
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f97316',
+    opacity: 0.3,
   },
   arElement2: {
     position: 'absolute',
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    borderWidth: 2,
-    borderColor: '#f97316',
-    bottom: '15%',
-    left: '5%',
-    opacity: 0.15,
-    backgroundColor: 'transparent',
+    top: 200,
+    left: 30,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#06b6d4',
+    opacity: 0.4,
   },
   arElement3: {
     position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 2,
-    borderColor: '#f97316',
-    top: '30%',
-    left: '10%',
-    opacity: 0.25,
-    backgroundColor: 'transparent',
+    bottom: 200,
+    right: 40,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#8b5cf6',
+    opacity: 0.3,
   },
   scanLine1: {
     position: 'absolute',
-    width: '100%',
-    height: 2,
+    top: 150,
+    left: 0,
+    right: 0,
+    height: 1,
     backgroundColor: '#f97316',
-    opacity: 0.3,
-    top: '20%',
+    opacity: 0.5,
   },
   scanLine2: {
     position: 'absolute',
-    width: '100%',
-    height: 2,
-    backgroundColor: '#f97316',
-    opacity: 0.3,
-    bottom: '20%',
+    bottom: 300,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: '#06b6d4',
+    opacity: 0.4,
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
-    paddingBottom: 100,
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 20,
   },
   welcomeSection: {
     flex: 1,
   },
   welcomeText: {
-    color: '#f97316',
     fontSize: 16,
-    fontWeight: '600',
+    color: '#9ca3af',
+    marginBottom: 5,
   },
   userNameText: {
-    color: '#fff',
     fontSize: 24,
     fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 5,
   },
   userEmailText: {
-    color: '#9ca3af',
     fontSize: 14,
-    marginTop: 4,
+    color: '#6b7280',
   },
   profileButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#f97316',
-    justifyContent: 'center',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#1f2937',
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#f97316',
   },
   profileIcon: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 18,
+    color: '#f97316',
   },
   userCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
+    marginHorizontal: 20,
+    marginBottom: 30,
+    backgroundColor: '#1f2937',
+    borderRadius: 15,
+    padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(249, 115, 22, 0.2)',
+    borderColor: '#374151',
   },
   userCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 15,
   },
   userCardTitle: {
-    color: '#fff',
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
+    color: '#ffffff',
   },
   statusIndicator: {
     width: 12,
@@ -929,48 +1217,50 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   userCardContent: {
-    gap: 8,
+    gap: 10,
   },
   userInfoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
   userInfoLabel: {
-    color: '#9ca3af',
     fontSize: 14,
+    color: '#9ca3af',
   },
   userInfoValue: {
-    color: '#fff',
     fontSize: 14,
+    color: '#ffffff',
     fontWeight: '500',
   },
   section: {
-    marginBottom: 20,
+    marginHorizontal: 20,
+    marginBottom: 30,
   },
   sectionTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 12,
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 15,
   },
   sessionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#1f2937',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
+    padding: 15,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: 'rgba(249, 115, 22, 0.2)',
+    borderColor: '#374151',
   },
   sessionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f97316',
-    justifyContent: 'center',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#374151',
     alignItems: 'center',
-    marginRight: 12,
+    justifyContent: 'center',
+    marginRight: 15,
   },
   sessionIconText: {
     fontSize: 20,
@@ -979,61 +1269,65 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sessionName: {
-    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 4,
   },
   sessionType: {
+    fontSize: 14,
     color: '#9ca3af',
-    fontSize: 12,
   },
   sessionAction: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(249, 115, 22, 0.2)',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   sessionActionText: {
+    fontSize: 18,
     color: '#f97316',
-    fontSize: 16,
   },
   arWorldButton: {
-    backgroundColor: '#f97316',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
+    marginHorizontal: 20,
     marginTop: 20,
+    backgroundColor: '#f97316',
+    borderRadius: 20,
+    padding: 25,
+    alignItems: 'center',
     position: 'relative',
     overflow: 'hidden',
   },
   buttonGlow: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    position: 'absolute',
+    top: -2,
+    left: -2,
+    right: -2,
+    bottom: -2,
+    backgroundColor: '#f97316',
+    borderRadius: 22,
     opacity: 0.3,
   },
   arWorldButtonText: {
-    color: '#fff',
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 5,
   },
   arWorldButtonSubtext: {
-    color: '#fff',
-    fontSize: 12,
-    opacity: 0.7,
-    marginTop: 4,
+    fontSize: 14,
+    color: '#fed7aa',
   },
   cameraContainer: {
     flex: 1,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: '#000000',
   },
   scanningOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   scanningFrame: {
     width: 250,
@@ -1056,8 +1350,8 @@ const styles = StyleSheet.create({
     right: 0,
     left: 'auto',
     borderLeftWidth: 0,
-    borderBottomWidth: 0,
     borderRightWidth: 3,
+    borderBottomWidth: 0,
   },
   bottomLeft: {
     bottom: 0,
@@ -1079,71 +1373,78 @@ const styles = StyleSheet.create({
   },
   instructionsContainer: {
     position: 'absolute',
-    bottom: 120,
-    left: 0,
-    right: 0,
+    bottom: 150,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    borderRadius: 10,
+    padding: 15,
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: 16,
-    marginHorizontal: 20,
-    borderRadius: 8,
   },
   instructions: {
-    color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
+    color: '#ffffff',
     textAlign: 'center',
-    marginBottom: 4,
+    fontWeight: '500',
+    marginBottom: 5,
   },
   subInstructions: {
+    fontSize: 14,
     color: '#9ca3af',
-    fontSize: 12,
     textAlign: 'center',
+  },
+  debugInfo: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginTop: 5,
+    fontFamily: 'monospace',
   },
   backButton: {
     position: 'absolute',
-    bottom: 20,
-    backgroundColor: '#f97316',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    bottom: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(249, 115, 22, 0.9)',
+    borderRadius: 10,
+    padding: 15,
+    alignItems: 'center',
   },
   backButtonText: {
-    color: '#fff',
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
   },
   errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
     alignItems: 'center',
+    justifyContent: 'center',
     padding: 20,
-    backgroundColor: '#000',
   },
   errorText: {
-    color: '#f97316',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 20,
+    color: '#ef4444',
     textAlign: 'center',
     marginBottom: 10,
+    fontWeight: 'bold',
   },
   errorDetails: {
-    color: '#fff',
     fontSize: 14,
+    color: '#9ca3af',
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: 30,
   },
   retryButton: {
     backgroundColor: '#f97316',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  debugInfo: {
-    color: '#9ca3af',
-    fontSize: 10,
-    textAlign: 'center',
-    marginTop: 4,
+    borderRadius: 10,
+    padding: 15,
+    alignItems: 'center',
+    marginBottom: 15,
+    minWidth: 120,
   },
 });
