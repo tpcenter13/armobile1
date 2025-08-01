@@ -1,6 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
-import Constants from 'expo-constants';
+// index.tsx (Refactored)
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
@@ -16,34 +14,24 @@ import {
   View,
 } from 'react-native';
 
-interface LoginResponse {
-  token: string;
-  user: {
-    id: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone?: string;
-  };
-}
+// Components
+import { BackgroundElements } from './components';
 
-interface SignupResponse {
-  message: string;
-  user: {
-    id: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone?: string;
-  };
-}
+// Services
+import { ApiService, StorageService } from './components/services';
 
-const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://your-vercel-app.vercel.app';
+// Types & Constants
+import { COLORS } from './utils/constants';
 
 export default function Index() {
   const router = useRouter();
   const [isLogin, setIsLogin] = useState(true);
-  const [formData, setFormData] = useState({ email: '', password: '', firstName: '', lastName: '' });
+  const [formData, setFormData] = useState({ 
+    email: '', 
+    password: '', 
+    firstName: '', 
+    lastName: '' 
+  });
   const [isLoading, setIsLoading] = useState(false);
 
   const handleToggle = () => {
@@ -59,38 +47,37 @@ export default function Index() {
   const handleSubmit = async () => {
     console.log('Submit button clicked, isLogin:', isLogin, 'formData:', formData);
     setIsLoading(true);
+    
     try {
       if (isLogin) {
-        console.log('Sending login request to:', `${API_URL}/api/Login`);
-        const response = await axios.post<LoginResponse>(`${API_URL}/api/Login`, {
-          email: formData.email,
-          password: formData.password,
-        });
-
-        const { token, user } = response.data;
-
-        await AsyncStorage.setItem('authToken', token);
-        await AsyncStorage.setItem('user', JSON.stringify(user));
+        console.log('Attempting login...');
+        const response = await ApiService.login(formData.email, formData.password);
+        
+        const { token, user } = response;
+        
+        // Store auth data
+        await StorageService.setAuthToken(token);
+        await StorageService.setUser(user);
 
         console.log('Login successful:', user);
-
         router.push('/dashboard');
       } else {
-        console.log('Sending signup request to:', `${API_URL}/api/signup`);
-        const response = await axios.post<SignupResponse>(`${API_URL}/api/signup`, {
-          email: formData.email,
-          password: formData.password,
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-        });
+        console.log('Attempting signup...');
+        const response = await ApiService.signup(
+          formData.email,
+          formData.password,
+          formData.firstName,
+          formData.lastName
+        );
 
-        console.log('Signup successful:', response.data);
+        console.log('Signup successful:', response);
         Alert.alert('Success', 'Account created! Please log in.');
         setIsLogin(true);
+        setFormData({ email: formData.email, password: '', firstName: '', lastName: '' });
       }
     } catch (error: any) {
-      console.error('Error during submit:', error.response?.data || error.message);
-      Alert.alert('Error', error.response?.data?.error || 'Something went wrong');
+      console.error('Error during submit:', error.message);
+      Alert.alert('Error', error.message || 'Something went wrong');
     } finally {
       setIsLoading(false);
     }
@@ -98,18 +85,9 @@ export default function Index() {
 
   return (
     <>
-      <StatusBar barStyle="light-content" backgroundColor="#f97316" />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
       <View style={styles.container}>
-        <View style={styles.backgroundGradient} />
-        
-        <View style={styles.gridOverlay} />
-        
-        <View style={styles.arElement1} />
-        <View style={styles.arElement2} />
-        <View style={styles.arElement3} />
-        
-        <View style={styles.scanLine1} />
-        <View style={styles.scanLine2} />
+        <BackgroundElements />
 
         <KeyboardAvoidingView
           style={{ flex: 1, width: '100%' }}
@@ -117,7 +95,12 @@ export default function Index() {
           keyboardVerticalOffset={30}
         >
           <ScrollView
-            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}
+            contentContainerStyle={{ 
+              flexGrow: 1, 
+              justifyContent: 'center', 
+              alignItems: 'center', 
+              paddingVertical: 40 
+            }}
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.logoContainer}>
@@ -127,9 +110,13 @@ export default function Index() {
             </View>
 
             <View style={styles.formContainer}>
-              <Text style={styles.title}>{isLogin ? 'Access AR World' : 'Join AR Reality'}</Text>
+              <Text style={styles.title}>
+                {isLogin ? 'Access AR World' : 'Join AR Reality'}
+              </Text>
               <Text style={styles.subtitle}>
-                {isLogin ? 'Enter your credentials to dive into augmented reality' : 'Create your AR profile and explore new dimensions'}
+                {isLogin 
+                  ? 'Enter your credentials to dive into augmented reality' 
+                  : 'Create your AR profile and explore new dimensions'}
               </Text>
 
               {!isLogin && (
@@ -139,7 +126,7 @@ export default function Index() {
                     <TextInput
                       style={styles.input}
                       placeholder="First Name"
-                      placeholderTextColor="#64748b"
+                      placeholderTextColor={COLORS.textMuted}
                       onChangeText={(text) => handleChange('firstName', text)}
                       value={formData.firstName}
                       autoCapitalize="words"
@@ -150,7 +137,7 @@ export default function Index() {
                     <TextInput
                       style={styles.input}
                       placeholder="Last Name"
-                      placeholderTextColor="#64748b"
+                      placeholderTextColor={COLORS.textMuted}
                       onChangeText={(text) => handleChange('lastName', text)}
                       value={formData.lastName}
                       autoCapitalize="words"
@@ -164,7 +151,7 @@ export default function Index() {
                 <TextInput
                   style={styles.input}
                   placeholder="Email Address"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={COLORS.textMuted}
                   onChangeText={(text) => handleChange('email', text)}
                   value={formData.email}
                   keyboardType="email-address"
@@ -177,7 +164,7 @@ export default function Index() {
                 <TextInput
                   style={styles.input}
                   placeholder="Password"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={COLORS.textMuted}
                   secureTextEntry
                   onChangeText={(text) => handleChange('password', text)}
                   value={formData.password}
@@ -230,71 +217,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     position: 'relative',
-    backgroundColor: '#1a0a00',
-  },
-  backgroundGradient: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'linear-gradient(135deg, #1a0a00 0%, #2d1810 50%, #f97316 100%)',
-  },
-  gridOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.1,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#f97316',
-    borderStyle: 'solid',
-  },
-  arElement1: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 2,
-    borderColor: '#f97316',
-    top: 80,
-    right: 30,
-    opacity: 0.3,
-    backgroundColor: 'transparent',
-  },
-  arElement2: {
-    position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 2,
-    borderColor: '#fb923c',
-    bottom: 120,
-    left: 40,
-    opacity: 0.4,
-    backgroundColor: 'transparent',
-  },
-  arElement3: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 2,
-    borderColor: '#f59e0b',
-    top: 200,
-    left: 20,
-    opacity: 0.3,
-    backgroundColor: 'transparent',
-  },
-  scanLine1: {
-    position: 'absolute',
-    width: '100%',
-    height: 2,
-    backgroundColor: '#f97316',
-    top: '30%',
-    opacity: 0.5,
-  },
-  scanLine2: {
-    position: 'absolute',
-    width: '100%',
-    height: 1,
-    backgroundColor: '#fb923c',
-    bottom: '25%',
-    opacity: 0.4,
+    backgroundColor: COLORS.backgroundGradient,
   },
   logoContainer: {
     alignItems: 'center',
@@ -303,20 +226,20 @@ const styles = StyleSheet.create({
   appTitle: {
     fontSize: 36,
     fontWeight: 'bold',
-    color: '#f97316',
+    color: COLORS.primary,
     letterSpacing: 3,
     textAlign: 'center',
   },
   appSubtitle: {
     fontSize: 14,
-    color: '#fb923c',
+    color: COLORS.primaryLight,
     marginTop: 4,
     letterSpacing: 1,
   },
   logoAccent: {
     width: 80,
     height: 3,
-    backgroundColor: '#f97316',
+    backgroundColor: COLORS.primary,
     marginTop: 8,
     borderRadius: 2,
   },
@@ -325,10 +248,10 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     padding: 32,
     borderRadius: 24,
-    backgroundColor: 'rgba(26, 10, 0, 0.9)',
+    backgroundColor: `rgba(26, 10, 0, 0.9)`,
     borderWidth: 1,
-    borderColor: 'rgba(249, 115, 22, 0.2)',
-    shadowColor: '#f97316',
+    borderColor: `rgba(249, 115, 22, 0.2)`,
+    shadowColor: COLORS.primary,
     shadowOpacity: 0.2,
     shadowOffset: { width: 0, height: 8 },
     shadowRadius: 24,
@@ -337,13 +260,13 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#f1f5f9',
+    color: COLORS.text,
     marginBottom: 8,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 14,
-    color: '#64748b',
+    color: COLORS.textMuted,
     marginBottom: 32,
     textAlign: 'center',
     lineHeight: 20,
@@ -359,24 +282,24 @@ const styles = StyleSheet.create({
     right: -2,
     bottom: -2,
     borderRadius: 18,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    backgroundColor: `rgba(249, 115, 22, 0.1)`,
     opacity: 0,
   },
   input: {
     borderWidth: 2,
-    borderColor: '#ea580c',
+    borderColor: COLORS.primaryDark,
     borderRadius: 16,
     padding: 18,
     fontSize: 16,
-    backgroundColor: 'rgba(52, 21, 8, 0.8)',
-    color: '#f1f5f9',
+    backgroundColor: `rgba(52, 21, 8, 0.8)`,
+    color: COLORS.text,
     marginBottom: 0,
   },
   button: {
     position: 'relative',
     backgroundColor: 'transparent',
     borderWidth: 2,
-    borderColor: '#f97316',
+    borderColor: COLORS.primary,
     paddingVertical: 16,
     borderRadius: 16,
     marginBottom: 24,
@@ -390,11 +313,11 @@ const styles = StyleSheet.create({
   },
   buttonGlow: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    backgroundColor: `rgba(249, 115, 22, 0.1)`,
   },
   buttonText: {
     textAlign: 'center',
-    color: '#f97316',
+    color: COLORS.primary,
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 1,
@@ -408,7 +331,7 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     textAlign: 'center',
-    color: '#64748b',
+    color: COLORS.textMuted,
     fontSize: 14,
   },
   featuresContainer: {
@@ -426,7 +349,7 @@ const styles = StyleSheet.create({
   },
   featureText: {
     fontSize: 10,
-    color: '#64748b',
+    color: COLORS.textMuted,
     textAlign: 'center',
   },
 });
