@@ -1,20 +1,11 @@
 // types/index.ts
+
 export interface User {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
   phone?: string;
-}
-
-export interface LoginResponse {
-  token: string;
-  user: User;
-}
-
-export interface SignupResponse {
-  message: string;
-  user: User;
 }
 
 export interface ARSession {
@@ -31,17 +22,6 @@ export interface MarkerData {
   patternUrl?: string;
 }
 
-export interface WebViewMessage {
-  type: 'markerFound' | 'markerLost' | 'videoAutoPlayFailed' | 'videoError' | 'initializationError' | 'globalError' | 'videoLoaded';
-  message?: string;
-  error?: string;
-}
-
-export interface CameraPermissions {
-  granted: boolean;
-  canAskAgain: boolean;
-}
-
 export interface ARState {
   showCamera: boolean;
   showImageScanner: boolean;
@@ -51,4 +31,17 @@ export interface ARState {
   markerData: MarkerData | null;
   markerId: string | null;
   webViewError: string | null;
+}
+
+// ✅ Add these based on expected API responses
+
+export interface LoginResponse {
+  token: string;
+  user: User;
+}
+
+export interface SignupResponse {
+  message: string;
+  user: User;
+  token?: string; // if your backend returns token on signup
 }
