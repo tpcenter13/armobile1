@@ -45,3 +45,13 @@ export interface SignupResponse {
   user: User;
   token?: string; // if your backend returns token on signup
 }
+
+
+// ✅ Add WebViewMessage interface for AR component
+export interface WebViewMessage {
+  type: 'markerFound' | 'markerLost' | 'videoAutoPlayFailed' | 'videoError' | 'initializationError' | 'globalError' | 'videoLoaded'  | 'debug' | 'cameraPermissionDenied' | 'cameraPermissionNeeded' |'videoPlayError';
+  message?: string;
+  error?: string;
+}
+
+
