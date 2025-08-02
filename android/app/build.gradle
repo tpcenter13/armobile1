@@ -87,7 +87,7 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.arweb1"
+    namespace 'com.tpcenter13.arweb1'
     defaultConfig {
         applicationId 'com.tpcenter13.arweb1'
         minSdkVersion rootProject.ext.minSdkVersion
