@@ -1,18 +1,22 @@
 {
-  "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "target": "esnext",
-    "types": ["expo-camera"],
+    "types": [
+      "expo-camera"
+    ],
     "module": "esnext",
     "jsx": "react-native",
     "strict": true,
-    "moduleResolution": "bundler", // Changed from "node" to support customConditions
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "@/*": ["./*"]
-    }
+      "@/*": [
+        "./*"
+      ]
+    },
+    "baseUrl": "."
   },
   "include": [
     "**/*.ts",
@@ -21,5 +25,12 @@
     "expo-env.d.ts",
     "nativewind-env.d.ts"
   ],
-  "exclude": ["node_modules", "build", "**/__mocks__/*", "**/__tests__/*", "**/__rsc_tests__/*"]
+  "exclude": [
+    "node_modules",
+    "build",
+    "**/__mocks__/*",
+    "**/__tests__/*",
+    "**/__rsc_tests__/*"
+  ],
+  "extends": "expo/tsconfig.base"
 }
